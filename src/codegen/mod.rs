@@ -4342,6 +4342,12 @@ pub(crate) fn codegen(
             for (id, item) in context.items() {
                 if codegen_items.contains(&id) {
                     println!("ir: {:?} = {:#?}", id, item);
+                    if let ItemKind::Function(function) = item.kind() {
+                        use crate::ir::emit::Emit;
+                        let mut buf = Vec::<u8>::new();
+                        function.emit(context, &mut buf).unwrap();
+                        eprintln!("{}", String::from_utf8(buf).unwrap());
+                    }
                 }
             }
         }
