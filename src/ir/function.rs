@@ -390,8 +390,8 @@ impl FunctionSig {
 
         // Don't parse operatorxx functions in C++
         let is_operator = |spelling: &str| {
-            spelling.starts_with("operator") &&
-                !clang::is_valid_identifier(spelling)
+            spelling.starts_with("operator")
+                && !clang::is_valid_identifier(spelling)
         };
         if is_operator(&spelling) {
             return Err(ParseError::Continue);
@@ -400,8 +400,8 @@ impl FunctionSig {
         // Constructors of non-type template parameter classes for some reason
         // include the template parameter in their name. Just skip them, since
         // we don't handle well non-type template parameters anyway.
-        if (kind == CXCursor_Constructor || kind == CXCursor_Destructor) &&
-            spelling.contains('<')
+        if (kind == CXCursor_Constructor || kind == CXCursor_Destructor)
+            && spelling.contains('<')
         {
             return Err(ParseError::Continue);
         }
@@ -413,11 +413,11 @@ impl FunctionSig {
         };
 
         let mut args = match kind {
-            CXCursor_FunctionDecl |
-            CXCursor_Constructor |
-            CXCursor_CXXMethod |
-            CXCursor_ObjCInstanceMethodDecl |
-            CXCursor_ObjCClassMethodDecl => {
+            CXCursor_FunctionDecl
+            | CXCursor_Constructor
+            | CXCursor_CXXMethod
+            | CXCursor_ObjCInstanceMethodDecl
+            | CXCursor_ObjCClassMethodDecl => {
                 args_from_ty_and_cursor(ty, &cursor, ctx)
             }
             _ => {
@@ -448,13 +448,13 @@ impl FunctionSig {
             }
         };
 
-        let must_use = ctx.options().enable_function_attribute_detection &&
-            cursor.has_warn_unused_result_attr();
+        let must_use = ctx.options().enable_function_attribute_detection
+            && cursor.has_warn_unused_result_attr();
         let is_method = kind == CXCursor_CXXMethod;
         let is_constructor = kind == CXCursor_Constructor;
         let is_destructor = kind == CXCursor_Destructor;
-        if (is_constructor || is_destructor || is_method) &&
-            cursor.lexical_parent() != cursor.semantic_parent()
+        if (is_constructor || is_destructor || is_method)
+            && cursor.lexical_parent() != cursor.semantic_parent()
         {
             // Only parse constructors once.
             return Err(ParseError::Continue);
@@ -495,8 +495,8 @@ impl FunctionSig {
             }
         }
 
-        let ty_ret_type = if kind == CXCursor_ObjCInstanceMethodDecl ||
-            kind == CXCursor_ObjCClassMethodDecl
+        let ty_ret_type = if kind == CXCursor_ObjCInstanceMethodDecl
+            || kind == CXCursor_ObjCClassMethodDecl
         {
             ty.ret_type()
                 .or_else(|| cursor.ret_type())
@@ -645,19 +645,15 @@ impl ClangSubItemParser for Function {
         let function =
             Self::new(name, mangled_name, sig, comment, kind, linkage);
         if is_inlined {
-            println!("FOUND INLINED FUNCTION");
+            println!("FOUND INLINED FUNCTION: {}", function.name());
 
-            let mut buf = Vec::<u8>::new();
+            let mut buf = String::new();
             emit_function(&function, context, &mut buf).unwrap();
-            context
-                .inlined_function_wrappers
-                .push(String::from_utf8(buf).unwrap());
+            context.inlined_function_wrappers.push(buf);
 
-            let mut buf = Vec::<u8>::new();
+            let mut buf = String::new();
             emit_signature(&function, context, &mut buf).unwrap();
-            context
-                .inlined_function_headers
-                .push(String::from_utf8(buf).unwrap());
+            context.inlined_function_headers.push(buf);
         }
 
         Ok(ParseResult::New(function, Some(cursor)))

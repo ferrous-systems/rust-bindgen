@@ -1,4 +1,4 @@
-use std::io;
+use std::fmt;
 
 use crate::callbacks::IntKind;
 
@@ -7,8 +7,8 @@ use super::function::{Function, FunctionKind};
 use super::ty::{FloatKind, TypeKind};
 
 fn emit_sep<
-    W: io::Write,
-    F: Fn(I::Item, &BindgenContext, &mut W) -> io::Result<()>,
+    W: fmt::Write,
+    F: Fn(I::Item, &BindgenContext, &mut W) -> fmt::Result,
     I: Iterator,
 >(
     sep: &'static str,
@@ -16,7 +16,7 @@ fn emit_sep<
     ctx: &BindgenContext,
     buf: &mut W,
     f: F,
-) -> io::Result<()> {
+) -> fmt::Result {
     if let Some(item) = iter.next() {
         f(item, ctx, buf)?;
 
@@ -29,11 +29,11 @@ fn emit_sep<
     Ok(())
 }
 
-fn emit_type<W: io::Write>(
+fn emit_type<W: fmt::Write>(
     type_id: TypeId,
     ctx: &BindgenContext,
     buf: &mut W,
-) -> io::Result<()> {
+) -> fmt::Result {
     match ctx.resolve_type(type_id).kind() {
         TypeKind::Void => write!(buf, "void"),
         TypeKind::NullPtr => write!(buf, "nullptr_t"),
@@ -95,14 +95,15 @@ fn emit_type<W: io::Write>(
             )?;
             write!(buf, ")")
         }
-        _ => todo!(),
+        TypeKind::ResolvedTypeRef(type_id) => emit_type(*type_id, ctx, buf),
+        t => todo!("{:?}", t),
     }
 }
-pub fn emit_signature<W: io::Write>(
+pub fn emit_signature<W: fmt::Write>(
     function: &Function,
     ctx: &BindgenContext,
     buf: &mut W,
-) -> io::Result<()> {
+) -> fmt::Result {
     match function.kind() {
         FunctionKind::Function => {
             let signature_type = ctx.resolve_type(function.signature());
@@ -148,11 +149,11 @@ pub fn emit_signature<W: io::Write>(
     }
 }
 
-pub fn emit_function<W: io::Write>(
+pub fn emit_function<W: fmt::Write>(
     function: &Function,
     ctx: &BindgenContext,
     buf: &mut W,
-) -> io::Result<()> {
+) -> fmt::Result {
     match function.kind() {
         FunctionKind::Function => {
             let signature_type = ctx.resolve_type(function.signature());

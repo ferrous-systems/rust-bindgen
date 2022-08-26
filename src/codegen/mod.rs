@@ -30,7 +30,6 @@ use crate::ir::derive::{
     CanDeriveHash, CanDeriveOrd, CanDerivePartialEq, CanDerivePartialOrd,
 };
 use crate::ir::dot;
-use crate::ir::emit::{emit_function, emit_signature};
 use crate::ir::enum_ty::{Enum, EnumVariant, EnumVariantValue};
 use crate::ir::function::{Abi, Function, FunctionKind, FunctionSig, Linkage};
 use crate::ir::int::IntKind;
