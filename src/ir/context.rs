@@ -462,6 +462,9 @@ pub struct BindgenContext {
 
     /// The set of warnings raised during binding generation.
     warnings: Vec<String>,
+
+    pub(crate) inlined_function_wrappers: Vec<String>,
+    pub(crate) inlined_function_headers: Vec<String>,
 }
 
 /// A traversal of allowlisted items.
@@ -583,6 +586,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             has_type_param_in_array: None,
             has_float: None,
             warnings: Vec::new(),
+            inlined_function_wrappers: Default::default(),
+            inlined_function_headers: Default::default(),
         }
     }
 

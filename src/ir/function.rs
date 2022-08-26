@@ -7,6 +7,7 @@ use super::item::Item;
 use super::traversal::{EdgeKind, Trace, Tracer};
 use super::ty::TypeKind;
 use crate::clang;
+use crate::ir::emit::{emit_function, emit_signature};
 use crate::parse::{
     ClangItemParser, ClangSubItemParser, ParseError, ParseResult,
 };
@@ -600,7 +601,9 @@ impl ClangSubItemParser for Function {
             return Err(ParseError::Continue);
         }
 
+        let mut is_inlined = false;
         if cursor.is_inlined_function() {
+            is_inlined = true;
             if !context.options().generate_inline_functions {
                 return Err(ParseError::Continue);
             }
@@ -641,6 +644,22 @@ impl ClangSubItemParser for Function {
 
         let function =
             Self::new(name, mangled_name, sig, comment, kind, linkage);
+        if is_inlined {
+            println!("FOUND INLINED FUNCTION");
+
+            let mut buf = Vec::<u8>::new();
+            emit_function(&function, context, &mut buf).unwrap();
+            context
+                .inlined_function_wrappers
+                .push(String::from_utf8(buf).unwrap());
+
+            let mut buf = Vec::<u8>::new();
+            emit_signature(&function, context, &mut buf).unwrap();
+            context
+                .inlined_function_headers
+                .push(String::from_utf8(buf).unwrap());
+        }
+
         Ok(ParseResult::New(function, Some(cursor)))
     }
 }

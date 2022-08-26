@@ -30,6 +30,7 @@ use crate::ir::derive::{
     CanDeriveHash, CanDeriveOrd, CanDerivePartialEq, CanDerivePartialOrd,
 };
 use crate::ir::dot;
+use crate::ir::emit::{emit_function, emit_signature};
 use crate::ir::enum_ty::{Enum, EnumVariant, EnumVariantValue};
 use crate::ir::function::{Abi, Function, FunctionKind, FunctionSig, Linkage};
 use crate::ir::int::IntKind;
@@ -4342,12 +4343,6 @@ pub(crate) fn codegen(
             for (id, item) in context.items() {
                 if codegen_items.contains(&id) {
                     println!("ir: {:?} = {:#?}", id, item);
-                    if let ItemKind::Function(function) = item.kind() {
-                        use crate::ir::emit::emit_function;
-                        let mut buf = Vec::<u8>::new();
-                        emit_function(function, context, &mut buf).unwrap();
-                        eprintln!("emit: {}", String::from_utf8(buf).unwrap());
-                    }
                 }
             }
         }
@@ -4383,6 +4378,16 @@ pub(crate) fn codegen(
             let dynamic_items_tokens =
                 result.dynamic_items().get_tokens(lib_ident);
             result.push(dynamic_items_tokens);
+        }
+
+        eprintln!("HEADERS");
+        for signature in &context.inlined_function_headers {
+            eprintln!("headers: {}", signature);
+        }
+
+        eprintln!("WRAPPERS");
+        for function in &context.inlined_function_wrappers {
+            eprintln!("wrappers: {}", function);
         }
 
         result.items
