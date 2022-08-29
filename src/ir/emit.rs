@@ -6,6 +6,8 @@ use super::context::{BindgenContext, TypeId};
 use super::function::{Function, FunctionKind};
 use super::ty::{FloatKind, TypeKind};
 
+pub const FUNCTION_SUFFIX: &'static str = "__extern";
+
 #[derive(Debug)]
 pub(crate) struct CItem {
     header: String,
@@ -45,7 +47,7 @@ impl CItem {
 
                         emit_type(signature.return_type(), ctx, &mut buf)
                             .unwrap();
-                        write!(buf, " {}__extern(", name).unwrap();
+                        write!(buf, " {}{}(", name,FUNCTION_SUFFIX).unwrap();
                         emit_sep(
                             ", ",
                             args.iter(),

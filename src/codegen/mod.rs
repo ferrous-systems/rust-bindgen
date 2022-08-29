@@ -3924,6 +3924,10 @@ impl CodeGenerator for Function {
         debug!("<Function as CodeGenerator>::codegen: item = {:?}", item);
         debug_assert!(item.is_enabled_for_codegen(ctx));
 
+        if self.is_inlined() {
+            return None;
+        }
+
         // We can't currently do anything with Internal functions so just
         // avoid generating anything for them.
         match self.linkage() {
@@ -4335,9 +4339,7 @@ impl CodeGenerator for ObjCInterface {
     }
 }
 
-pub(crate) fn codegen(
-    context: BindgenContext,
-) -> CodegenOutput {
+pub(crate) fn codegen(context: BindgenContext) -> CodegenOutput {
     context.gen(|context| {
         let _t = context.timer("codegen");
         let counter = Cell::new(0);

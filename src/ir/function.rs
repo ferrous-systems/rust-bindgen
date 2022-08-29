@@ -95,6 +95,9 @@ pub struct Function {
 
     /// The linkage of the function.
     linkage: Linkage,
+
+    /// FIXME: docs.
+    is_inlined: bool,
 }
 
 impl Function {
@@ -106,6 +109,7 @@ impl Function {
         comment: Option<String>,
         kind: FunctionKind,
         linkage: Linkage,
+        is_inlined: bool,
     ) -> Self {
         Function {
             name,
@@ -114,6 +118,7 @@ impl Function {
             comment,
             kind,
             linkage,
+            is_inlined,
         }
     }
 
@@ -145,6 +150,10 @@ impl Function {
     /// Get this function's linkage.
     pub fn linkage(&self) -> Linkage {
         self.linkage
+    }
+
+    pub fn is_inlined(&self) -> bool {
+        self.is_inlined
     }
 }
 
@@ -601,9 +610,8 @@ impl ClangSubItemParser for Function {
             return Err(ParseError::Continue);
         }
 
-        let mut is_inlined = false;
-        if cursor.is_inlined_function() {
-            is_inlined = true;
+        let is_inlined = cursor.is_inlined_function();
+        if is_inlined {
             if !context.options().generate_inline_functions {
                 return Err(ParseError::Continue);
             }
@@ -642,11 +650,17 @@ impl ClangSubItemParser for Function {
         let mangled_name = cursor_mangling(context, &cursor);
         let comment = cursor.raw_comment();
 
-        let function =
-            Self::new(name, mangled_name, sig, comment, kind, linkage);
-        if is_inlined {
-            println!("FOUND INLINED FUNCTION: {}", function.name());
+        let function = Self::new(
+            name,
+            mangled_name,
+            sig,
+            comment,
+            kind,
+            linkage,
+            is_inlined,
+        );
 
+        if is_inlined {
             context
                 .c_items
                 .push(CItem::from_function(&function, context));
