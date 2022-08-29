@@ -7,7 +7,7 @@ use super::item::Item;
 use super::traversal::{EdgeKind, Trace, Tracer};
 use super::ty::TypeKind;
 use crate::clang;
-use crate::ir::emit::{emit_function, emit_signature};
+use crate::ir::emit::CItem;
 use crate::parse::{
     ClangItemParser, ClangSubItemParser, ParseError, ParseResult,
 };
@@ -647,13 +647,9 @@ impl ClangSubItemParser for Function {
         if is_inlined {
             println!("FOUND INLINED FUNCTION: {}", function.name());
 
-            let mut buf = String::new();
-            emit_function(&function, context, &mut buf).unwrap();
-            context.inlined_function_wrappers.push(buf);
-
-            let mut buf = String::new();
-            emit_signature(&function, context, &mut buf).unwrap();
-            context.inlined_function_headers.push(buf);
+            context
+                .c_items
+                .push(CItem::from_function(&function, context));
         }
 
         Ok(ParseResult::New(function, Some(cursor)))

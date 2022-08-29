@@ -66,6 +66,7 @@ doc_mod!(ir, ir_docs);
 doc_mod!(parse, parse_docs);
 doc_mod!(regex_set, regex_set_docs);
 
+use crate::codegen::CodegenOutput;
 pub use crate::codegen::{AliasVariation, EnumVariation, MacroTypeVariation};
 use crate::features::RustFeatures;
 pub use crate::features::{
@@ -92,10 +93,10 @@ pub(crate) use std::collections::hash_map::Entry;
 pub const DEFAULT_ANON_FIELDS_PREFIX: &str = "__bindgen_anon_";
 
 fn file_is_cpp(name_file: &str) -> bool {
-    name_file.ends_with(".hpp") ||
-        name_file.ends_with(".hxx") ||
-        name_file.ends_with(".hh") ||
-        name_file.ends_with(".h++")
+    name_file.ends_with(".hpp")
+        || name_file.ends_with(".hxx")
+        || name_file.ends_with(".hh")
+        || name_file.ends_with(".h++")
 }
 
 fn args_are_cpp(clang_args: &[String]) -> bool {
@@ -262,8 +263,8 @@ impl Builder {
         // FIXME(emilio): This is a bit hacky, maybe we should stop re-using the
         // RustFeatures to store the "disable_untagged_union" call, and make it
         // a different flag that we check elsewhere / in generate().
-        if !self.options.rust_features.untagged_union &&
-            RustFeatures::from(self.options.rust_target).untagged_union
+        if !self.options.rust_features.untagged_union
+            && RustFeatures::from(self.options.rust_target).untagged_union
         {
             output_vector.push("--disable-untagged-union".into());
         }
@@ -1346,6 +1347,9 @@ impl Builder {
     /// responsible of compiling the library to make them callable.
     pub fn generate_inline_functions(mut self, doit: bool) -> Self {
         self.options.generate_inline_functions = doit;
+        if doit && self.options.c_codegen_path.is_none() {
+            self.options.c_codegen_path = Some(DEFAULT_C_CODEGEN_PATH.to_owned());
+        }
         self
     }
 
@@ -1690,6 +1694,8 @@ impl Builder {
     }
 }
 
+const DEFAULT_C_CODEGEN_PATH: &'static str = "./c_output";
+
 /// Configuration options for generated bindings.
 #[derive(Debug)]
 struct BindgenOptions {
@@ -2005,6 +2011,9 @@ struct BindgenOptions {
 
     /// Emit vtable functions.
     vtable_generation: bool,
+
+    /// FIXME: docs
+    c_codegen_path: Option<String>,
 }
 
 /// TODO(emilio): This is sort of a lie (see the error message that results from
@@ -2153,6 +2162,7 @@ impl Default for BindgenOptions {
             c_naming: false,
             force_explicit_padding: false,
             vtable_generation: false,
+            c_codegen_path: None,
         }
     }
 }
@@ -2195,6 +2205,14 @@ pub enum BindgenError {
     NotExist(PathBuf),
     /// Clang diagnosed an error.
     ClangDiagnostic(String),
+    /// FIXME: docs.
+    Io(String),
+}
+
+impl From<std::io::Error> for BindgenError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err.to_string())
+    }
 }
 
 impl std::fmt::Display for BindgenError {
@@ -2211,6 +2229,9 @@ impl std::fmt::Display for BindgenError {
             }
             BindgenError::ClangDiagnostic(message) => {
                 write!(f, "clang diagnosed error: {}", message)
+            }
+            BindgenError::Io(message) => {
+                write!(f, "io error: {}", message)
             }
         }
     }
@@ -2436,7 +2457,28 @@ impl Bindings {
             parse(&mut context)?;
         }
 
-        let (items, options, warnings) = codegen::codegen(context);
+        let CodegenOutput {
+            output: items,
+            options,
+            warnings,
+            c_items,
+        } = codegen::codegen(context);
+
+        if let Some(path) = &options.c_codegen_path {
+            let path: &Path = path.as_ref();
+
+            if !path.exists() {
+                std::fs::create_dir(path)?;
+            }
+
+            let mut headers_file = File::create(path.join("hello.h"))?;
+            let mut source_file = File::create(path.join("hello.c"))?;
+
+            for item in c_items {
+                writeln!(headers_file, "{}", item.header())?;
+                writeln!(source_file, "{}", item.code())?;
+            }
+        }
 
         Ok(Bindings {
             options,

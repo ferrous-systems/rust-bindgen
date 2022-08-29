@@ -1,10 +1,94 @@
-use std::fmt;
+use std::fmt::{self, Write};
 
 use crate::callbacks::IntKind;
 
 use super::context::{BindgenContext, TypeId};
 use super::function::{Function, FunctionKind};
 use super::ty::{FloatKind, TypeKind};
+
+#[derive(Debug)]
+pub(crate) struct CItem {
+    header: String,
+    code: String,
+}
+
+impl CItem {
+    pub(crate) fn from_function(
+        function: &Function,
+        ctx: &BindgenContext,
+    ) -> Self {
+        match function.kind() {
+            FunctionKind::Function => {
+                let signature_type = ctx.resolve_type(function.signature());
+                match signature_type.kind() {
+                    TypeKind::Function(signature) => {
+                        let mut buf = String::new();
+
+                        let mut count = 0;
+
+                        let name = function.name();
+                        let args = signature
+                            .argument_types()
+                            .iter()
+                            .cloned()
+                            .map(|(opt_name, type_id)| {
+                                (
+                                    opt_name.unwrap_or_else(|| {
+                                        let name = format!("arg_{}", count);
+                                        count += 1;
+                                        name
+                                    }),
+                                    type_id,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
+                        emit_type(signature.return_type(), ctx, &mut buf)
+                            .unwrap();
+                        write!(buf, " {}__extern(", name).unwrap();
+                        emit_sep(
+                            ", ",
+                            args.iter(),
+                            ctx,
+                            &mut buf,
+                            |(name, type_id), ctx, buf| {
+                                emit_type(*type_id, ctx, buf)?;
+                                write!(buf, " {}", name)
+                            },
+                        )
+                        .unwrap();
+                        write!(buf, ")").unwrap();
+
+                        let header = format!("{};", buf);
+
+                        write!(buf, " {{ return {}(", name).unwrap();
+                        emit_sep(
+                            ", ",
+                            args.iter(),
+                            ctx,
+                            &mut buf,
+                            |(name, _), _, buf| write!(buf, "{}", name),
+                        )
+                        .unwrap();
+                        write!(buf, "); }}").unwrap();
+
+                        Self { header, code: buf }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            FunctionKind::Method(_) => todo!(),
+        }
+    }
+
+    pub(crate) fn header(&self) -> &str {
+        self.header.as_ref()
+    }
+
+    pub(crate) fn code(&self) -> &str {
+        self.code.as_ref()
+    }
+}
 
 fn emit_sep<
     W: fmt::Write,
@@ -97,112 +181,5 @@ fn emit_type<W: fmt::Write>(
         }
         TypeKind::ResolvedTypeRef(type_id) => emit_type(*type_id, ctx, buf),
         t => todo!("{:?}", t),
-    }
-}
-pub fn emit_signature<W: fmt::Write>(
-    function: &Function,
-    ctx: &BindgenContext,
-    buf: &mut W,
-) -> fmt::Result {
-    match function.kind() {
-        FunctionKind::Function => {
-            let signature_type = ctx.resolve_type(function.signature());
-            match signature_type.kind() {
-                TypeKind::Function(signature) => {
-                    let mut count = 0;
-
-                    let name = function.name();
-                    let args = signature
-                        .argument_types()
-                        .iter()
-                        .cloned()
-                        .map(|(opt_name, type_id)| {
-                            (
-                                opt_name.unwrap_or_else(|| {
-                                    let name = format!("arg_{}", count);
-                                    count += 1;
-                                    name
-                                }),
-                                type_id,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-
-                    emit_type(signature.return_type(), ctx, buf)?;
-                    write!(buf, " {}__extern(", name)?;
-                    emit_sep(
-                        ", ",
-                        args.iter(),
-                        ctx,
-                        buf,
-                        |(name, type_id), ctx, buf| {
-                            emit_type(*type_id, ctx, buf)?;
-                            write!(buf, " {}", name)
-                        },
-                    )?;
-                    write!(buf, ");")
-                }
-                _ => unreachable!(),
-            }
-        }
-        FunctionKind::Method(_) => todo!(),
-    }
-}
-
-pub fn emit_function<W: fmt::Write>(
-    function: &Function,
-    ctx: &BindgenContext,
-    buf: &mut W,
-) -> fmt::Result {
-    match function.kind() {
-        FunctionKind::Function => {
-            let signature_type = ctx.resolve_type(function.signature());
-            match signature_type.kind() {
-                TypeKind::Function(signature) => {
-                    let mut count = 0;
-
-                    let name = function.name();
-                    let args = signature
-                        .argument_types()
-                        .iter()
-                        .cloned()
-                        .map(|(opt_name, type_id)| {
-                            (
-                                opt_name.unwrap_or_else(|| {
-                                    let name = format!("arg_{}", count);
-                                    count += 1;
-                                    name
-                                }),
-                                type_id,
-                            )
-                        })
-                        .collect::<Vec<_>>();
-
-                    emit_type(signature.return_type(), ctx, buf)?;
-                    write!(buf, " {}__extern(", name)?;
-                    emit_sep(
-                        ", ",
-                        args.iter(),
-                        ctx,
-                        buf,
-                        |(name, type_id), ctx, buf| {
-                            emit_type(*type_id, ctx, buf)?;
-                            write!(buf, " {}", name)
-                        },
-                    )?;
-                    write!(buf, ") {{ return {}(", name)?;
-                    emit_sep(
-                        ", ",
-                        args.iter(),
-                        ctx,
-                        buf,
-                        |(name, _), _, buf| write!(buf, "{}", name),
-                    )?;
-                    write!(buf, "); }}")
-                }
-                _ => unreachable!(),
-            }
-        }
-        FunctionKind::Method(_) => todo!(),
     }
 }

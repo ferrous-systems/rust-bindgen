@@ -30,6 +30,7 @@ use crate::ir::derive::{
     CanDeriveHash, CanDeriveOrd, CanDerivePartialEq, CanDerivePartialOrd,
 };
 use crate::ir::dot;
+use crate::ir::emit::CItem;
 use crate::ir::enum_ty::{Enum, EnumVariant, EnumVariantValue};
 use crate::ir::function::{Abi, Function, FunctionKind, FunctionSig, Linkage};
 use crate::ir::int::IntKind;
@@ -189,6 +190,13 @@ impl From<DerivableTraits> for Vec<&'static str> {
         })
         .collect()
     }
+}
+
+pub(crate) struct CodegenOutput<T = Vec<proc_macro2::TokenStream>> {
+    pub(crate) output: T,
+    pub(crate) options: BindgenOptions,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) c_items: Vec<CItem>,
 }
 
 struct CodegenResult<'a> {
@@ -4329,7 +4337,7 @@ impl CodeGenerator for ObjCInterface {
 
 pub(crate) fn codegen(
     context: BindgenContext,
-) -> (Vec<proc_macro2::TokenStream>, BindgenOptions, Vec<String>) {
+) -> CodegenOutput {
     context.gen(|context| {
         let _t = context.timer("codegen");
         let counter = Cell::new(0);
@@ -4377,16 +4385,6 @@ pub(crate) fn codegen(
             let dynamic_items_tokens =
                 result.dynamic_items().get_tokens(lib_ident);
             result.push(dynamic_items_tokens);
-        }
-
-        eprintln!("HEADERS");
-        for signature in &context.inlined_function_headers {
-            eprintln!("headers: {}", signature);
-        }
-
-        eprintln!("WRAPPERS");
-        for function in &context.inlined_function_wrappers {
-            eprintln!("wrappers: {}", function);
         }
 
         result.items

@@ -11,6 +11,7 @@ use super::derive::{
     CanDerive, CanDeriveCopy, CanDeriveDebug, CanDeriveDefault, CanDeriveEq,
     CanDeriveHash, CanDeriveOrd, CanDerivePartialEq, CanDerivePartialOrd,
 };
+use super::emit::CItem;
 use super::function::Function;
 use super::int::IntKind;
 use super::item::{IsOpaque, Item, ItemAncestors, ItemSet};
@@ -21,6 +22,7 @@ use super::traversal::{self, Edge, ItemTraversal};
 use super::ty::{FloatKind, Type, TypeKind};
 use crate::callbacks::ParseCallbacks;
 use crate::clang::{self, Cursor};
+use crate::codegen::CodegenOutput;
 use crate::parse::ClangItemParser;
 use crate::BindgenOptions;
 use crate::{Entry, HashMap, HashSet};
@@ -463,8 +465,7 @@ pub struct BindgenContext {
     /// The set of warnings raised during binding generation.
     warnings: Vec<String>,
 
-    pub(crate) inlined_function_wrappers: Vec<String>,
-    pub(crate) inlined_function_headers: Vec<String>,
+    pub(crate) c_items: Vec<CItem>,
 }
 
 /// A traversal of allowlisted items.
@@ -586,8 +587,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             has_type_param_in_array: None,
             has_float: None,
             warnings: Vec::new(),
-            inlined_function_wrappers: Default::default(),
-            inlined_function_headers: Default::default(),
+            c_items: Default::default(),
         }
     }
 
@@ -663,11 +663,11 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             item, declaration, location
         );
         debug_assert!(
-            declaration.is_some() ||
-                !item.kind().is_type() ||
-                item.kind().expect_type().is_builtin_or_type_param() ||
-                item.kind().expect_type().is_opaque(self, &item) ||
-                item.kind().expect_type().is_unresolved_ref(),
+            declaration.is_some()
+                || !item.kind().is_type()
+                || item.kind().expect_type().is_builtin_or_type_param()
+                || item.kind().expect_type().is_opaque(self, &item)
+                || item.kind().expect_type().is_unresolved_ref(),
             "Adding a type without declaration?"
         );
 
@@ -1039,10 +1039,10 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             };
 
             match *ty.kind() {
-                TypeKind::Comp(..) |
-                TypeKind::TemplateAlias(..) |
-                TypeKind::Enum(..) |
-                TypeKind::Alias(..) => {}
+                TypeKind::Comp(..)
+                | TypeKind::TemplateAlias(..)
+                | TypeKind::Enum(..)
+                | TypeKind::Alias(..) => {}
                 _ => continue,
             }
 
@@ -1143,10 +1143,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
 
     /// Enter the code generation phase, invoke the given callback `cb`, and
     /// leave the code generation phase.
-    pub(crate) fn gen<F, Out>(
-        mut self,
-        cb: F,
-    ) -> (Out, BindgenOptions, Vec<String>)
+    pub(crate) fn gen<F, Out>(mut self, cb: F) -> CodegenOutput<Out>
     where
         F: FnOnce(&Self) -> Out,
     {
@@ -1182,8 +1179,12 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         self.compute_cannot_derive_hash();
         self.compute_cannot_derive_partialord_partialeq_or_eq();
 
-        let ret = cb(&self);
-        (ret, self.options, self.warnings)
+        CodegenOutput {
+            output: cb(&self),
+            options: self.options,
+            warnings: self.warnings,
+            c_items: self.c_items,
+        }
     }
 
     /// When the `testing_only_extra_assertions` feature is enabled, this
