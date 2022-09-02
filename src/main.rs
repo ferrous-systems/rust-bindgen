@@ -6,7 +6,7 @@ extern crate env_logger;
 extern crate log;
 extern crate clap;
 
-use bindgen::clang_version;
+use bindgen::{clang_version, options};
 use std::env;
 use std::panic;
 
@@ -14,7 +14,6 @@ use std::panic;
 #[cfg(not(feature = "logging"))]
 mod log_stubs;
 
-mod options;
 use crate::options::builder_from_flags;
 
 fn clang_version_check() {

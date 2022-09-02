@@ -47,7 +47,7 @@ impl CItem {
 
                         emit_type(signature.return_type(), ctx, &mut buf)
                             .unwrap();
-                        write!(buf, " {}{}(", name,FUNCTION_SUFFIX).unwrap();
+                        write!(buf, " {}{}(", name, FUNCTION_SUFFIX).unwrap();
                         emit_sep(
                             ", ",
                             args.iter(),

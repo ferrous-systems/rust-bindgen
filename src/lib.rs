@@ -30,6 +30,8 @@ extern crate log;
 #[macro_use]
 mod log_stubs;
 
+pub mod options;
+
 #[macro_use]
 mod extra_assertions;
 
@@ -93,10 +95,10 @@ pub(crate) use std::collections::hash_map::Entry;
 pub const DEFAULT_ANON_FIELDS_PREFIX: &str = "__bindgen_anon_";
 
 fn file_is_cpp(name_file: &str) -> bool {
-    name_file.ends_with(".hpp")
-        || name_file.ends_with(".hxx")
-        || name_file.ends_with(".hh")
-        || name_file.ends_with(".h++")
+    name_file.ends_with(".hpp") ||
+        name_file.ends_with(".hxx") ||
+        name_file.ends_with(".hh") ||
+        name_file.ends_with(".h++")
 }
 
 fn args_are_cpp(clang_args: &[String]) -> bool {
@@ -263,8 +265,8 @@ impl Builder {
         // FIXME(emilio): This is a bit hacky, maybe we should stop re-using the
         // RustFeatures to store the "disable_untagged_union" call, and make it
         // a different flag that we check elsewhere / in generate().
-        if !self.options.rust_features.untagged_union
-            && RustFeatures::from(self.options.rust_target).untagged_union
+        if !self.options.rust_features.untagged_union &&
+            RustFeatures::from(self.options.rust_target).untagged_union
         {
             output_vector.push("--disable-untagged-union".into());
         }
@@ -1348,7 +1350,8 @@ impl Builder {
     pub fn generate_inline_functions(mut self, doit: bool) -> Self {
         self.options.generate_inline_functions = doit;
         if doit && self.options.c_codegen_path.is_none() {
-            self.options.c_codegen_path = Some(DEFAULT_C_CODEGEN_PATH.to_owned());
+            self.options.c_codegen_path =
+                Some(DEFAULT_C_CODEGEN_PATH.to_owned());
         }
         self
     }
@@ -1482,6 +1485,7 @@ impl Builder {
 
     /// Generate the Rust bindings using the options built up thus far.
     pub fn generate(mut self) -> Result<Bindings, BindgenError> {
+        let flags = self.command_line_flags();
         // Add any extra arguments from the environment to the clang command line.
         self.options.clang_args.extend(get_extra_clang_args());
 
@@ -1503,7 +1507,7 @@ impl Builder {
                 }),
         );
 
-        Bindings::generate(self.options)
+        Bindings::generate(self.options, flags)
     }
 
     /// Preprocess and dump the input header files to disk.
@@ -2296,6 +2300,7 @@ impl Bindings {
     /// Generate bindings for the given options.
     pub(crate) fn generate(
         mut options: BindgenOptions,
+        mut flags: Vec<String>,
     ) -> Result<Bindings, BindgenError> {
         ensure_libclang_is_loaded();
 
@@ -2465,18 +2470,42 @@ impl Bindings {
         } = codegen::codegen(context);
 
         if let Some(path) = &options.c_codegen_path {
-            let path: &Path = path.as_ref();
+            if !c_items.is_empty() {
+                let path: &Path = path.as_ref();
 
-            if !path.exists() {
-                std::fs::create_dir(path)?;
-            }
+                if !path.exists() {
+                    std::fs::create_dir(path)?;
+                }
 
-            let mut headers_file = File::create(path.join("hello.h"))?;
-            let mut source_file = File::create(path.join("hello.c"))?;
+                let path = std::fs::canonicalize(path).unwrap();
 
-            for item in c_items {
-                writeln!(headers_file, "{}", item.header())?;
-                writeln!(source_file, "{}", item.code())?;
+                flags.insert(0, String::new());
+
+                // This cannot fail because the flags were generated from a valid builder.
+                let mut builder =
+                    options::builder_from_flags(flags.into_iter()).unwrap().0;
+
+                let mut headers_file = File::create(path.join("hello.h"))?;
+                let mut source_file = File::create(path.join("hello.c"))?;
+
+                for input_header in &builder.input_headers {
+                    let input_header = format!(
+                        "#include \"{}\"",
+                        std::fs::canonicalize(input_header).unwrap().display()
+                    );
+                    writeln!(headers_file, "{}", input_header)?;
+                    writeln!(source_file, "{}", input_header)?;
+                }
+
+                for item in c_items {
+                    writeln!(headers_file, "{}", item.header())?;
+                    writeln!(source_file, "{}", item.code())?;
+                }
+
+                builder.input_headers =
+                    vec![path.join("hello.h").display().to_string()];
+
+                return builder.generate_inline_functions(false).generate();
             }
         }
 
@@ -2844,7 +2873,6 @@ fn commandline_flag_unit_test_function() {
     .iter()
     .map(|&x| x.into())
     .collect::<Vec<String>>();
-    println!("{:?}", command_line_flags);
 
     assert!(test_cases.iter().all(|x| command_line_flags.contains(x)));
 }

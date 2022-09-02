@@ -3,7 +3,6 @@
 //! Parsing C/C++ generates the IR, while code generation outputs Rust code from
 //! the IR.
 
-pub mod emit;
 pub mod analysis;
 pub mod annotations;
 pub mod comment;
@@ -11,6 +10,7 @@ pub mod comp;
 pub mod context;
 pub mod derive;
 pub mod dot;
+pub mod emit;
 pub mod enum_ty;
 pub mod function;
 pub mod int;

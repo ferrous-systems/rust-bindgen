@@ -1,4 +1,6 @@
-use bindgen::{
+//! FIXME: docs
+
+use crate::{
     builder, AliasVariation, Builder, CodegenConfig, EnumVariation,
     MacroTypeVariation, RustTarget, DEFAULT_ANON_FIELDS_PREFIX,
     RUST_TARGET_STRINGS,

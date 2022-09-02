@@ -663,11 +663,11 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             item, declaration, location
         );
         debug_assert!(
-            declaration.is_some()
-                || !item.kind().is_type()
-                || item.kind().expect_type().is_builtin_or_type_param()
-                || item.kind().expect_type().is_opaque(self, &item)
-                || item.kind().expect_type().is_unresolved_ref(),
+            declaration.is_some() ||
+                !item.kind().is_type() ||
+                item.kind().expect_type().is_builtin_or_type_param() ||
+                item.kind().expect_type().is_opaque(self, &item) ||
+                item.kind().expect_type().is_unresolved_ref(),
             "Adding a type without declaration?"
         );
 
@@ -1039,10 +1039,10 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             };
 
             match *ty.kind() {
-                TypeKind::Comp(..)
-                | TypeKind::TemplateAlias(..)
-                | TypeKind::Enum(..)
-                | TypeKind::Alias(..) => {}
+                TypeKind::Comp(..) |
+                TypeKind::TemplateAlias(..) |
+                TypeKind::Enum(..) |
+                TypeKind::Alias(..) => {}
                 _ => continue,
             }
 

@@ -30,7 +30,7 @@ use crate::ir::derive::{
     CanDeriveHash, CanDeriveOrd, CanDerivePartialEq, CanDerivePartialOrd,
 };
 use crate::ir::dot;
-use crate::ir::emit::CItem;
+use crate::ir::emit::{CItem, FUNCTION_SUFFIX};
 use crate::ir::enum_ty::{Enum, EnumVariant, EnumVariantValue};
 use crate::ir::function::{Abi, Function, FunctionKind, FunctionSig, Linkage};
 use crate::ir::int::IntKind;
@@ -4034,6 +4034,7 @@ impl CodeGenerator for Function {
             write!(&mut canonical_name, "{}", times_seen).unwrap();
         }
 
+        let mut has_link_name_attr = false;
         let link_name = mangled_name.unwrap_or(name);
         if !is_dynamic_function &&
             !utils::names_will_be_identical_after_mangling(
@@ -4043,6 +4044,7 @@ impl CodeGenerator for Function {
             )
         {
             attributes.push(attributes::link_name(link_name));
+            has_link_name_attr = true;
         }
 
         // Unfortunately this can't piggyback on the `attributes` list because
@@ -4052,6 +4054,14 @@ impl CodeGenerator for Function {
             ctx.options().wasm_import_module_name.as_ref().map(|name| {
                 quote! { #[link(wasm_import_module = #name)] }
             });
+
+        if canonical_name.ends_with(FUNCTION_SUFFIX) {
+            if !has_link_name_attr {
+                attributes.push(attributes::link_name(&canonical_name));
+            }
+            canonical_name =
+                canonical_name.trim_end_matches(FUNCTION_SUFFIX).to_owned();
+        }
 
         let ident = ctx.rust_ident(canonical_name);
         let tokens = quote! {
