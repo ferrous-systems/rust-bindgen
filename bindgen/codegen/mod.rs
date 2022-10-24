@@ -54,7 +54,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::iter;
-use std::ops;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 // Name of type defined in constified enum module
@@ -194,6 +194,7 @@ impl From<DerivableTraits> for Vec<&'static str> {
 
 struct CodegenResult<'a> {
     items: Vec<proc_macro2::TokenStream>,
+    modules: HashMap<String, Vec<proc_macro2::TokenStream>>,
     dynamic_items: DynamicItems,
 
     /// A monotonic counter used to add stable unique id's to stuff that doesn't
@@ -245,6 +246,7 @@ impl<'a> CodegenResult<'a> {
     fn new(codegen_id: &'a Cell<usize>) -> Self {
         CodegenResult {
             items: vec![],
+            modules: Default::default(),
             dynamic_items: DynamicItems::new(),
             saw_bindgen_union: false,
             saw_incomplete_array: false,
@@ -333,18 +335,21 @@ impl<'a> CodegenResult<'a> {
 
         new.items
     }
-}
 
-impl<'a> ops::Deref for CodegenResult<'a> {
-    type Target = Vec<proc_macro2::TokenStream>;
+    fn get_items(
+        &mut self,
+        item: &Item,
+        ctx: &BindgenContext,
+    ) -> &mut Vec<proc_macro2::TokenStream> {
+        if ctx.options().files_as_modules {
+            if let Some(name) = item.location().and_then(|src| {
+                let path = PathBuf::from(src.location().0.name()?);
+                path.file_stem()?.to_owned().into_string().ok()
+            }) {
+                return self.modules.entry(name).or_default();
+            }
+        }
 
-    fn deref(&self) -> &Self::Target {
-        &self.items
-    }
-}
-
-impl<'a> ops::DerefMut for CodegenResult<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.items
     }
 }
@@ -527,22 +532,37 @@ impl CodeGenerator for Module {
 
             if item.id() == ctx.root_module() {
                 if result.saw_block {
-                    utils::prepend_block_header(ctx, &mut *result);
+                    utils::prepend_block_header(
+                        ctx,
+                        result.get_items(item, ctx),
+                    );
                 }
                 if result.saw_bindgen_union {
-                    utils::prepend_union_types(ctx, &mut *result);
+                    utils::prepend_union_types(
+                        ctx,
+                        result.get_items(item, ctx),
+                    );
                 }
                 if result.saw_incomplete_array {
-                    utils::prepend_incomplete_array_types(ctx, &mut *result);
+                    utils::prepend_incomplete_array_types(
+                        ctx,
+                        result.get_items(item, ctx),
+                    );
                 }
                 if ctx.need_bindgen_complex_type() {
-                    utils::prepend_complex_type(&mut *result);
+                    utils::prepend_complex_type(result.get_items(item, ctx));
                 }
                 if result.saw_objc {
-                    utils::prepend_objc_header(ctx, &mut *result);
+                    utils::prepend_objc_header(
+                        ctx,
+                        result.get_items(item, ctx),
+                    );
                 }
                 if result.saw_bitfield_unit {
-                    utils::prepend_bitfield_unit_type(ctx, &mut *result);
+                    utils::prepend_bitfield_unit_type(
+                        ctx,
+                        result.get_items(item, ctx),
+                    );
                 }
             }
         };
@@ -557,13 +577,13 @@ impl CodeGenerator for Module {
 
         let mut found_any = false;
         let inner_items = result.inner(|result| {
-            result.push(root_import(ctx, item));
+            result.get_items(item, ctx).push(root_import(ctx, item));
 
             let path = item.namespace_aware_canonical_path(ctx).join("::");
             if let Some(raw_lines) = ctx.options().module_lines.get(&path) {
                 for raw_line in raw_lines {
                     found_any = true;
-                    result.push(
+                    result.get_items(item, ctx).push(
                         proc_macro2::TokenStream::from_str(raw_line).unwrap(),
                     );
                 }
@@ -579,7 +599,7 @@ impl CodeGenerator for Module {
 
         let name = item.canonical_name(ctx);
         let ident = ctx.rust_ident(name);
-        result.push(if item.id() == ctx.root_module() {
+        result.get_items(item, ctx).push(if item.id() == ctx.root_module() {
             quote! {
                 #[allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
                 pub mod #ident {
@@ -636,7 +656,7 @@ impl CodeGenerator for Var {
         if let Some(val) = self.val() {
             match *val {
                 VarType::Bool(val) => {
-                    result.push(quote! {
+                    result.get_items(item, ctx).push(quote! {
                         #(#attrs)*
                         pub const #canonical_ident : #ty = #val ;
                     });
@@ -656,7 +676,7 @@ impl CodeGenerator for Var {
                     } else {
                         helpers::ast_ty::uint_expr(val as _)
                     };
-                    result.push(quote! {
+                    result.get_items(item, ctx).push(quote! {
                         #(#attrs)*
                         pub const #canonical_ident : #ty = #val ;
                     });
@@ -679,12 +699,12 @@ impl CodeGenerator for Var {
                                 .rust_features
                                 .static_lifetime_elision
                             {
-                                result.push(quote! {
+                                result.get_items(item, ctx).push(quote! {
                                     #(#attrs)*
                                     pub const #canonical_ident : &#ty = #cstr ;
                                 });
                             } else {
-                                result.push(quote! {
+                                result.get_items(item, ctx).push(quote! {
                                     #(#attrs)*
                                     pub const #canonical_ident : &'static #ty = #cstr ;
                                 });
@@ -692,7 +712,7 @@ impl CodeGenerator for Var {
                         }
                         Err(..) => {
                             let bytes = helpers::ast_ty::byte_array_expr(bytes);
-                            result.push(quote! {
+                            result.get_items(item, ctx).push(quote! {
                                 #(#attrs)*
                                 pub const #canonical_ident : #ty = #bytes ;
                             });
@@ -701,14 +721,14 @@ impl CodeGenerator for Var {
                 }
                 VarType::Float(f) => {
                     if let Ok(expr) = helpers::ast_ty::float_expr(ctx, f) {
-                        result.push(quote! {
+                        result.get_items(item, ctx).push(quote! {
                             #(#attrs)*
                             pub const #canonical_ident : #ty = #expr ;
                         });
                     }
                 }
                 VarType::Char(c) => {
-                    result.push(quote! {
+                    result.get_items(item, ctx).push(quote! {
                         #(#attrs)*
                         pub const #canonical_ident : #ty = #c ;
                     });
@@ -738,7 +758,7 @@ impl CodeGenerator for Var {
                 }
             );
 
-            result.push(tokens);
+            result.get_items(item, ctx).push(tokens);
         }
     }
 }
@@ -755,6 +775,8 @@ impl CodeGenerator for Type {
     ) {
         debug!("<Type as CodeGenerator>::codegen: item = {:?}", item);
         debug_assert!(item.is_enabled_for_codegen(ctx));
+
+        let items = result.get_items(item, ctx);
 
         match *self.kind() {
             TypeKind::Void |
@@ -809,7 +831,7 @@ impl CodeGenerator for Type {
                     pub type #rust_name = #inner_rust_type ;
                 });
 
-                result.push(tokens);
+                items.push(tokens);
                 result.saw_block();
             }
             TypeKind::Comp(ref ci) => ci.codegen(ctx, result, item),
@@ -943,7 +965,7 @@ impl CodeGenerator for Type {
                     tokens.append_all(quote! {
                         :: #inner_rust_type  as #rust_name ;
                     });
-                    result.push(tokens);
+                    items.push(tokens);
                     return;
                 }
 
@@ -1035,7 +1057,7 @@ impl CodeGenerator for Type {
                     });
                 }
 
-                result.push(tokens);
+                items.push(tokens);
             }
             TypeKind::Enum(ref ei) => ei.codegen(ctx, result, item),
             TypeKind::ObjCId | TypeKind::ObjCSel => {
@@ -1076,6 +1098,9 @@ impl<'a> CodeGenerator for Vtable<'a> {
     ) {
         assert_eq!(item.id(), self.item_id);
         debug_assert!(item.is_enabled_for_codegen(ctx));
+
+        let items = result.get_items(item, ctx);
+
         let name = ctx.rust_ident(&self.canonical_name(ctx));
 
         // For now, we will only generate vtables for classes that:
@@ -1124,7 +1149,7 @@ impl<'a> CodeGenerator for Vtable<'a> {
                 })
                 .collect::<Vec<_>>();
 
-            result.push(quote! {
+            items.push(quote! {
                 #[repr(C)]
                 pub struct #name {
                     #( #methods ),*
@@ -1134,7 +1159,7 @@ impl<'a> CodeGenerator for Vtable<'a> {
             // For the cases we don't support, simply generate an empty struct.
             let void = helpers::ast_ty::c_void(ctx);
 
-            result.push(quote! {
+            items.push(quote! {
                 #[repr(C)]
                 pub struct #name ( #void );
             });
@@ -1217,7 +1242,7 @@ impl CodeGenerator for TemplateInstantiation {
                 ::#prefix::mem::align_of::<#ident>()
             };
 
-            let item = quote! {
+            let tokens = quote! {
                 #[test]
                 fn #fn_name() {
                     assert_eq!(#size_of_expr, #size,
@@ -1229,7 +1254,7 @@ impl CodeGenerator for TemplateInstantiation {
                 }
             };
 
-            result.push(item);
+            result.get_items(item, ctx).push(tokens);
         }
     }
 }
@@ -2144,7 +2169,7 @@ impl CodeGenerator for CompInfo {
                 #( #fields )*
             }
         });
-        result.push(tokens);
+        result.get_items(item, ctx).push(tokens);
 
         // Generate the inner types and all that stuff.
         //
@@ -2256,7 +2281,7 @@ impl CodeGenerator for CompInfo {
                         None
                     };
 
-                    let item = quote! {
+                    let tokens = quote! {
                         #[test]
                         fn #fn_name() {
                             #uninit_decl
@@ -2267,7 +2292,7 @@ impl CodeGenerator for CompInfo {
                             #( #check_field_offset )*
                         }
                     };
-                    result.push(item);
+                    result.get_items(item, ctx).push(tokens);
                 }
             }
 
@@ -2324,7 +2349,7 @@ impl CodeGenerator for CompInfo {
         };
 
         if needs_clone_impl {
-            result.push(quote! {
+            result.get_items(item, ctx).push(quote! {
                 impl #generics Clone for #ty_for_impl {
                     fn clone(&self) -> Self { *self }
                 }
@@ -2354,7 +2379,7 @@ impl CodeGenerator for CompInfo {
             // not necessarily ensure padding bytes are zeroed. Some C libraries are sensitive to
             // non-zero padding bytes, especially when forwards/backwards compatability is
             // involved.
-            result.push(quote! {
+            result.get_items(item, ctx).push(quote! {
                 impl #generics Default for #ty_for_impl {
                     fn default() -> Self {
                         #body
@@ -2373,7 +2398,7 @@ impl CodeGenerator for CompInfo {
 
             let prefix = ctx.trait_prefix();
 
-            result.push(quote! {
+            result.get_items(item, ctx).push(quote! {
                 impl #generics ::#prefix::fmt::Debug for #ty_for_impl {
                     #impl_
                 }
@@ -2397,7 +2422,7 @@ impl CodeGenerator for CompInfo {
                 };
 
                 let prefix = ctx.trait_prefix();
-                result.push(quote! {
+                result.get_items(item, ctx).push(quote! {
                     impl #generics ::#prefix::cmp::PartialEq for #ty_for_impl #partialeq_bounds {
                         #impl_
                     }
@@ -2406,7 +2431,7 @@ impl CodeGenerator for CompInfo {
         }
 
         if !methods.is_empty() {
-            result.push(quote! {
+            result.get_items(item, ctx).push(quote! {
                 impl #generics #ty_for_impl {
                     #( #methods )*
                 }
@@ -2804,7 +2829,7 @@ impl<'a> EnumBuilder<'a> {
         variant: &EnumVariant,
         mangling_prefix: Option<&str>,
         rust_ty: proc_macro2::TokenStream,
-        result: &mut CodegenResult<'b>,
+        items: &'b mut Vec<proc_macro2::TokenStream>,
         is_ty_named: bool,
     ) -> Self {
         let variant_name = ctx.rust_mangle(variant.name());
@@ -2861,7 +2886,7 @@ impl<'a> EnumBuilder<'a> {
                     let enum_ident = ctx.rust_ident(canonical_name);
                     let variant_ident = ctx.rust_ident(variant_name);
 
-                    result.push(quote! {
+                    items.push(quote! {
                         impl #enum_ident {
                             #doc
                             pub const #variant_ident : #rust_ty = #rust_ty ( #expr );
@@ -2874,7 +2899,7 @@ impl<'a> EnumBuilder<'a> {
                         }
                         None => variant_name,
                     });
-                    result.push(quote! {
+                    items.push(quote! {
                         #doc
                         pub const #ident : #rust_ty = #rust_ty ( #expr );
                     });
@@ -2892,7 +2917,7 @@ impl<'a> EnumBuilder<'a> {
                 };
 
                 let ident = ctx.rust_ident(constant_name);
-                result.push(quote! {
+                items.push(quote! {
                     #doc
                     pub const #ident : #rust_ty = #expr ;
                 });
@@ -2924,7 +2949,7 @@ impl<'a> EnumBuilder<'a> {
         self,
         ctx: &BindgenContext,
         rust_ty: proc_macro2::TokenStream,
-        result: &mut CodegenResult<'b>,
+        items: &'b mut Vec<proc_macro2::TokenStream>,
     ) -> proc_macro2::TokenStream {
         match self {
             EnumBuilder::Rust {
@@ -2960,7 +2985,7 @@ impl<'a> EnumBuilder<'a> {
                 let rust_ty_name = ctx.rust_ident_raw(canonical_name);
                 let prefix = ctx.trait_prefix();
 
-                result.push(quote! {
+                items.push(quote! {
                     impl ::#prefix::ops::BitOr<#rust_ty> for #rust_ty {
                         type Output = Self;
 
@@ -2971,7 +2996,7 @@ impl<'a> EnumBuilder<'a> {
                     }
                 });
 
-                result.push(quote! {
+                items.push(quote! {
                     impl ::#prefix::ops::BitOrAssign for #rust_ty {
                         #[inline]
                         fn bitor_assign(&mut self, rhs: #rust_ty) {
@@ -2980,7 +3005,7 @@ impl<'a> EnumBuilder<'a> {
                     }
                 });
 
-                result.push(quote! {
+                items.push(quote! {
                     impl ::#prefix::ops::BitAnd<#rust_ty> for #rust_ty {
                         type Output = Self;
 
@@ -2991,7 +3016,7 @@ impl<'a> EnumBuilder<'a> {
                     }
                 });
 
-                result.push(quote! {
+                items.push(quote! {
                     impl ::#prefix::ops::BitAndAssign for #rust_ty {
                         #[inline]
                         fn bitand_assign(&mut self, rhs: #rust_ty) {
@@ -3031,6 +3056,7 @@ impl CodeGenerator for Enum {
     ) {
         debug!("<Enum as CodeGenerator>::codegen: item = {:?}", item);
         debug_assert!(item.is_enabled_for_codegen(ctx));
+        let items = result.get_items(item, ctx);
 
         let name = item.canonical_name(ctx);
         let ident = ctx.rust_ident(&name);
@@ -3173,7 +3199,7 @@ impl CodeGenerator for Enum {
             variant_name: &Ident,
             referenced_name: &Ident,
             enum_rust_ty: proc_macro2::TokenStream,
-            result: &mut CodegenResult<'a>,
+            items: &'a mut Vec<proc_macro2::TokenStream>,
         ) {
             let constant_name = if enum_.name().is_some() {
                 if ctx.options().prepend_enum_name {
@@ -3186,7 +3212,7 @@ impl CodeGenerator for Enum {
             };
             let constant_name = ctx.rust_ident(constant_name);
 
-            result.push(quote! {
+            items.push(quote! {
                 pub const #constant_name : #enum_rust_ty =
                     #enum_canonical_name :: #referenced_name ;
             });
@@ -3267,7 +3293,7 @@ impl CodeGenerator for Enum {
                             let enum_canonical_name = &ident;
                             let variant_name =
                                 ctx.rust_ident_raw(&*mangled_name);
-                            result.push(quote! {
+                            items.push(quote! {
                                 impl #enum_rust_ty {
                                     pub const #variant_name : #enum_rust_ty =
                                         #enum_canonical_name :: #existing_variant_name ;
@@ -3281,7 +3307,7 @@ impl CodeGenerator for Enum {
                                 &Ident::new(&mangled_name, Span::call_site()),
                                 existing_variant_name,
                                 enum_rust_ty.clone(),
-                                result,
+                                items,
                             );
                         }
                     } else {
@@ -3290,7 +3316,7 @@ impl CodeGenerator for Enum {
                             variant,
                             constant_mangling_prefix,
                             enum_rust_ty.clone(),
-                            result,
+                            items,
                             enum_ty.name().is_some(),
                         );
                     }
@@ -3301,7 +3327,7 @@ impl CodeGenerator for Enum {
                         variant,
                         constant_mangling_prefix,
                         enum_rust_ty.clone(),
-                        result,
+                        items,
                         enum_ty.name().is_some(),
                     );
 
@@ -3332,7 +3358,7 @@ impl CodeGenerator for Enum {
                             &mangled_name,
                             &variant_name,
                             enum_rust_ty.clone(),
-                            result,
+                            items,
                         );
                     }
 
@@ -3341,8 +3367,8 @@ impl CodeGenerator for Enum {
             }
         }
 
-        let item = builder.build(ctx, enum_rust_ty, result);
-        result.push(item);
+        let item = builder.build(ctx, enum_rust_ty, items);
+        items.push(item);
     }
 }
 
@@ -4182,7 +4208,7 @@ impl CodeGenerator for Function {
                 attributes,
             );
         } else {
-            result.push(tokens);
+            result.get_items(item, ctx).push(tokens);
         }
         Some(times_seen)
     }
@@ -4257,6 +4283,8 @@ impl CodeGenerator for ObjCInterface {
         item: &Item,
     ) {
         debug_assert!(item.is_enabled_for_codegen(ctx));
+
+        let items = result.get_items(item, ctx);
 
         let mut impl_items = vec![];
         let rust_class_name = item.path_for_allowlisting(ctx)[1..].join("::");
@@ -4336,7 +4364,7 @@ impl CodeGenerator for ObjCInterface {
                     }
                 }
             };
-            result.push(struct_block);
+            items.push(struct_block);
             let mut protocol_set: HashSet<ItemId> = Default::default();
             for protocol_id in self.conforms_to.iter() {
                 protocol_set.insert(*protocol_id);
@@ -4348,7 +4376,7 @@ impl CodeGenerator for ObjCInterface {
                 let impl_trait = quote! {
                     impl #protocol_name for #class_name { }
                 };
-                result.push(impl_trait);
+                items.push(impl_trait);
             }
             let mut parent_class = self.parent_class;
             while let Some(parent_id) = parent_class {
@@ -4382,7 +4410,7 @@ impl CodeGenerator for ObjCInterface {
                         impl #parent_name for #class_name { }
                     }
                 };
-                result.push(impl_trait);
+                items.push(impl_trait);
                 for protocol_id in parent.conforms_to.iter() {
                     if protocol_set.insert(*protocol_id) {
                         let protocol_name = ctx.rust_ident(
@@ -4393,7 +4421,7 @@ impl CodeGenerator for ObjCInterface {
                         let impl_trait = quote! {
                             impl #protocol_name for #class_name { }
                         };
-                        result.push(impl_trait);
+                        items.push(impl_trait);
                     }
                 }
                 if !parent.is_template() {
@@ -4407,7 +4435,7 @@ impl CodeGenerator for ObjCInterface {
                             }
                         }
                     };
-                    result.push(from_block);
+                    items.push(from_block);
 
                     let error_msg = format!(
                         "This {} cannot be downcasted to {}",
@@ -4426,7 +4454,7 @@ impl CodeGenerator for ObjCInterface {
                             }
                         }
                     };
-                    result.push(try_into_block);
+                    items.push(try_into_block);
                 }
             }
         }
@@ -4448,10 +4476,10 @@ impl CodeGenerator for ObjCInterface {
                     }
                 }
             };
-            result.push(impl_block);
+            items.push(impl_block);
         }
 
-        result.push(trait_block);
+        items.push(trait_block);
         result.saw_objc();
     }
 }
@@ -4494,18 +4522,40 @@ pub(crate) fn codegen(
                 Err(e) => warn!("{}", e),
             }
         }
-
+;
         context.resolve_item(context.root_module()).codegen(
             context,
             &mut result,
             &(),
         );
 
+        let mut modules = std::mem::take(&mut result.modules);
+        let mod_idents = modules
+            .keys()
+            .map(|name| Ident::new(name, Span::call_site()))
+            .collect::<Vec<_>>();
+
+        for mod_ident in &mod_idents {
+            let imports = mod_idents
+                .iter()
+                .filter(|&ident| ident != mod_ident)
+                .map(|ident| quote!(use crate::#ident::*;));
+
+            let items = modules.remove(&mod_ident.to_string()).unwrap();
+
+            result.items.push(quote! {
+                pub mod #mod_ident {
+                    #(#imports)*
+                    #(#items)*
+                }
+            });
+        }
+
         if let Some(ref lib_name) = context.options().dynamic_library_name {
             let lib_ident = context.rust_ident(lib_name);
             let dynamic_items_tokens =
                 result.dynamic_items().get_tokens(lib_ident);
-            result.push(dynamic_items_tokens);
+            result.items.push(dynamic_items_tokens);
         }
 
         postprocessing::postprocessing(result.items, context.options())

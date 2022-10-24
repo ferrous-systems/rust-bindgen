@@ -616,6 +616,10 @@ impl Builder {
             output_vector.push("--merge-extern-blocks".into());
         }
 
+        if self.options.files_as_modules {
+            output_vector.push("--files-as-modules".into());
+        }
+
         // Add clang arguments
 
         output_vector.push("--".into());
@@ -1766,6 +1770,12 @@ impl Builder {
         self.options.c_naming = doit;
         self
     }
+
+    /// Treat each input file as a module.
+    pub fn files_as_modules(mut self, doit: bool) -> Self {
+        self.options.files_as_modules = doit;
+        self
+    }
 }
 
 /// Configuration options for generated bindings.
@@ -2101,6 +2111,9 @@ struct BindgenOptions {
 
     /// Deduplicate `extern` blocks.
     merge_extern_blocks: bool,
+
+    /// Decide if each header file should be treated as its own module.
+    files_as_modules: bool,
 }
 
 impl BindgenOptions {
@@ -2252,6 +2265,7 @@ impl Default for BindgenOptions {
             vtable_generation: false,
             sort_semantically: false,
             merge_extern_blocks: false,
+            files_as_modules: false,
         }
     }
 }
