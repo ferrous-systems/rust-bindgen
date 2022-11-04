@@ -408,10 +408,10 @@ where
                 .help("Add a raw line of Rust code to a given module.")
                 .action(ArgAction::Append)
                 .number_of_values(2)
-                .value_names(&["module-name", "raw-line"]),
+                .value_names(["module-name", "raw-line"]),
             Arg::new("rust-target")
                 .long("rust-target")
-                .help(&rust_target_help)
+                .help(rust_target_help)
                 .action(ArgAction::Set),
             Arg::new("use-core")
                 .long("use-core")
@@ -616,6 +616,22 @@ where
                 .long("wrap-unsafe-ops")
                 .help("Wrap unsafe operations in unsafe blocks.")
                 .action(ArgAction::SetTrue),
+            Arg::new("generate-extern-functions")
+                .long("generate-extern-functions")
+                .help("Generate extern wrappers for inlined functions")
+                .action(ArgAction::SetTrue),
+            Arg::new("extern-functions-file-name")
+                .long("extern-functions-file-name")
+                .help("Sets the name of the header and source code files that would be created if any extern wrapper functions must be generated due to the presence of inlined functions.")
+                .action(ArgAction::Set),
+                Arg::new("extern-functions-directory")
+                .long("extern-functions-directory")
+                .help("Sets the directory path where any extra files must be created due to the presence of inlined functions.")
+                .action(ArgAction::Set),
+            Arg::new("extern-function-suffix")
+                .long("extern-function-suffix")
+                .help("Sets the suffix added to the extern wrapper functions generated for inlined functions.")
+                .action(ArgAction::Set),
             Arg::new("V")
                 .long("version")
                 .help("Prints the version, and exits")
@@ -1160,6 +1176,26 @@ where
 
     if matches.get_flag("wrap-unsafe-ops") {
         builder = builder.wrap_unsafe_ops(true);
+    }
+
+    if matches.get_flag("generate-extern-functions") {
+        builder = builder.generate_extern_functions(true);
+    }
+
+    if let Some(file_name) =
+        matches.get_one::<String>("extern-functions-file-name")
+    {
+        builder = builder.extern_functions_file_name(file_name);
+    }
+
+    if let Some(directory) =
+        matches.get_one::<String>("extern-functions-directory")
+    {
+        builder = builder.extern_functions_directory(directory);
+    }
+
+    if let Some(suffix) = matches.get_one::<String>("extern-function-suffix") {
+        builder = builder.extern_function_suffix(suffix);
     }
 
     Ok((builder, output, verbose))
