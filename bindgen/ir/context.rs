@@ -31,6 +31,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap as StdHashMap};
 use std::iter::IntoIterator;
 use std::mem;
+use std::path::{Path, PathBuf};
 
 /// An identifier for some kind of IR item.
 #[derive(Debug, Copy, Clone, Eq, PartialOrd, Ord, Hash)]
@@ -461,6 +462,8 @@ pub struct BindgenContext {
 
     /// The set of warnings raised during binding generation.
     warnings: Vec<String>,
+
+    system_header_folders: Vec<PathBuf>,
 }
 
 /// A traversal of allowlisted items.
@@ -541,6 +544,16 @@ If you encounter an error missing from this list, please file an issue or a PR!"
 
         // depfiles need to include the explicitly listed headers too
         let deps = options.input_headers.iter().cloned().collect();
+        let mut system_header_folders = Vec::new();
+        let mut clang_args = options.clang_args.iter();
+
+        while let Some(arg) = clang_args.next() {
+            if arg == "-isystem" {
+                system_header_folders.push(
+                    clang_args.next().expect("malformed clang args").into(),
+                );
+            }
+        }
 
         BindgenContext {
             items: vec![Some(root_module)],
@@ -576,6 +589,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             has_type_param_in_array: None,
             has_float: None,
             warnings: Vec::new(),
+            system_header_folders,
         }
     }
 
@@ -2701,6 +2715,16 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     pub fn must_use_type_by_name(&self, item: &Item) -> bool {
         let name = item.path_for_allowlisting(self)[1..].join("::");
         self.options().must_use_types.matches(name)
+    }
+
+    pub(crate) fn comes_from_system_header<P: AsRef<Path>>(
+        &self,
+        path: &P,
+    ) -> bool {
+        let path = path.as_ref();
+        self.system_header_folders
+            .iter()
+            .any(|folder| path.starts_with(folder))
     }
 }
 

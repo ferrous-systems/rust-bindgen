@@ -18,6 +18,7 @@ use self::struct_layout::StructLayoutTracker;
 
 use super::BindgenOptions;
 
+use crate::callbacks::ItemInfo;
 use crate::ir::analysis::{HasVtable, Sizedness};
 use crate::ir::annotations::FieldAccessorKind;
 use crate::ir::comment;
@@ -486,6 +487,24 @@ impl CodeGenerator for Item {
     ) {
         debug!("<Item as CodeGenerator>::codegen: self = {:?}", self);
         if !self.process_before_codegen(ctx, result) {
+            return;
+        }
+
+        let omit_item = ctx
+            .options()
+            .last_callback(|cb| {
+                let name = self.canonical_name(ctx);
+                let path = self.location()?.location().0.name()?;
+                let item_info = ItemInfo {
+                    comes_from_system_header: ctx
+                        .comes_from_system_header(&path),
+                };
+
+                Some(cb.omit_item(&name, item_info))
+            })
+            .unwrap_or_default();
+
+        if omit_item {
             return;
         }
 

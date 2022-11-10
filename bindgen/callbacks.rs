@@ -108,4 +108,21 @@ pub trait ParseCallbacks: fmt::Debug {
     fn add_derives(&self, _name: &str) -> Vec<String> {
         vec![]
     }
+
+    /// FIXME: docs
+    fn omit_item(&self, _name: &str, _item_info: ItemInfo) -> bool {
+        false
+    }
+}
+
+/// FIXME: docs
+pub struct ItemInfo {
+    pub(crate) comes_from_system_header: bool,
+}
+
+impl ItemInfo {
+    /// FIXME: docs
+    pub fn comes_from_system_header(&self) -> bool {
+        self.comes_from_system_header
+    }
 }
