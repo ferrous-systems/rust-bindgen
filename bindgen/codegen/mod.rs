@@ -498,6 +498,7 @@ impl CodeGenerator for Item {
                 let item_info = ItemInfo {
                     comes_from_system_header: ctx
                         .comes_from_system_header(&path),
+                    header_path: path.into(),
                 };
 
                 Some(cb.omit_item(&name, item_info))

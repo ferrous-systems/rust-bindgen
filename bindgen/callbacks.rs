@@ -5,6 +5,7 @@ pub use crate::ir::derive::CanDerive as ImplementsTrait;
 pub use crate::ir::enum_ty::{EnumVariantCustomBehavior, EnumVariantValue};
 pub use crate::ir::int::IntKind;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 /// An enum to allow ignoring parsing of macros.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -118,11 +119,17 @@ pub trait ParseCallbacks: fmt::Debug {
 /// FIXME: docs
 pub struct ItemInfo {
     pub(crate) comes_from_system_header: bool,
+    pub(crate) header_path: PathBuf,
 }
 
 impl ItemInfo {
     /// FIXME: docs
     pub fn comes_from_system_header(&self) -> bool {
         self.comes_from_system_header
+    }
+
+    /// FIXME: docs
+    pub fn header_path(&self) -> &Path {
+        &self.header_path
     }
 }
