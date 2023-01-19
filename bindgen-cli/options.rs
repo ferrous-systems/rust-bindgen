@@ -1182,15 +1182,11 @@ where
         builder = builder.generate_extern_functions(true);
     }
 
-    if let Some(file_name) =
-        matches.get_one::<String>("extern-functions-file-name")
-    {
+    if let Some(file_name) = matches.get_one::<String>("extern-functions-file-name") {
         builder = builder.extern_functions_file_name(file_name);
     }
 
-    if let Some(directory) =
-        matches.get_one::<String>("extern-functions-directory")
-    {
+    if let Some(directory) = matches.get_one::<String>("extern-functions-directory") {
         builder = builder.extern_functions_directory(directory);
     }
 
