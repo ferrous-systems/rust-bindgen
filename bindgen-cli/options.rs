@@ -355,6 +355,9 @@ struct BindgenCommand {
     /// inline` functions.
     #[arg(long, requires = "experimental", value_name = "SUFFIX")]
     wrap_static_fns_suffix: Option<String>,
+    /// Whether to emit diagnostics or not.
+    #[arg(long)]
+    emit_diagnostics: bool,
     /// Enables experimental features.
     #[arg(long)]
     experimental: bool,
@@ -478,6 +481,7 @@ where
         wrap_static_fns,
         wrap_static_fns_path,
         wrap_static_fns_suffix,
+        emit_diagnostics,
         experimental: _,
         version,
         clang_args,
@@ -953,12 +957,25 @@ where
         }
     }
 
-    for (custom_derives, kind) in [
-        (with_derive_custom, None),
-        (with_derive_custom_struct, Some(TypeKind::Struct)),
-        (with_derive_custom_enum, Some(TypeKind::Enum)),
-        (with_derive_custom_union, Some(TypeKind::Union)),
+    for (custom_derives, kind, name) in [
+        (with_derive_custom, None, "--with-derive-custom"),
+        (
+            with_derive_custom_struct,
+            Some(TypeKind::Struct),
+            "--with-derive-custom-struct",
+        ),
+        (
+            with_derive_custom_enum,
+            Some(TypeKind::Enum),
+            "--with-derive-custom-enum",
+        ),
+        (
+            with_derive_custom_union,
+            Some(TypeKind::Union),
+            "--with-derive-custom-union",
+        ),
     ] {
+        let name = emit_diagnostics.then(|| name);
         for custom_derive in custom_derives {
             let (regex, derives) = custom_derive
                 .rsplit_once('=')
@@ -967,7 +984,7 @@ where
 
             let mut regex_set = RegexSet::new();
             regex_set.insert(regex);
-            regex_set.build(false);
+            regex_set.build_with_diagnostics(false, name);
 
             builder = builder.parse_callbacks(Box::new(CustomDeriveCallback {
                 derives,
@@ -987,6 +1004,10 @@ where
 
     if let Some(suffix) = wrap_static_fns_suffix {
         builder = builder.wrap_static_fns_suffix(suffix);
+    }
+
+    if emit_diagnostics {
+        builder = builder.emit_diagnostics(true);
     }
 
     Ok((builder, output, verbose))

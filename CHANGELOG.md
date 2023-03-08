@@ -162,12 +162,15 @@
 # Unreleased
 
 ## Added
+ * new feature: `--emit-diagnostics` flag to emit diagnostic messages.
 
 ## Changed
 
 ## Removed
  * The following deprecated flags were removed: `--use-msvc-mangling`,
    `--rustfmt-bindings` and `--size_t-is-usize`.
+ * The `Bindings::emit_warnings` and `Bindings::warnings` methods were removed
+   in favor of `--emit-diagnostics`.
 
 ## Fixed
 
