@@ -95,10 +95,10 @@ pub const DEFAULT_ANON_FIELDS_PREFIX: &str = "__bindgen_anon_";
 const DEFAULT_NON_EXTERN_FNS_SUFFIX: &str = "__extern";
 
 fn file_is_cpp(name_file: &str) -> bool {
-    name_file.ends_with(".hpp")
-        || name_file.ends_with(".hxx")
-        || name_file.ends_with(".hh")
-        || name_file.ends_with(".h++")
+    name_file.ends_with(".hpp") ||
+        name_file.ends_with(".hxx") ||
+        name_file.ends_with(".hh") ||
+        name_file.ends_with(".h++")
 }
 
 fn args_are_cpp(clang_args: &[String]) -> bool {
@@ -273,8 +273,8 @@ impl Builder {
         // FIXME(emilio): This is a bit hacky, maybe we should stop re-using the
         // RustFeatures to store the "disable_untagged_union" call, and make it
         // a different flag that we check elsewhere / in generate().
-        if !self.options.rust_features.untagged_union
-            && RustFeatures::from(self.options.rust_target).untagged_union
+        if !self.options.rust_features.untagged_union &&
+            RustFeatures::from(self.options.rust_target).untagged_union
         {
             output_vector.push("--disable-untagged-union".into());
         }
@@ -2506,8 +2506,8 @@ fn rust_to_clang_target(rust_target: &str) -> String {
             rust_target.strip_suffix("-espidf").unwrap().to_owned();
         clang_target.push_str("-elf");
         if clang_target.starts_with("riscv32imc-") {
-            clang_target = "riscv32-".to_owned()
-                + clang_target.strip_prefix("riscv32imc-").unwrap();
+            clang_target = "riscv32-".to_owned() +
+                clang_target.strip_prefix("riscv32imc-").unwrap();
         }
         return clang_target;
     }
@@ -2602,8 +2602,8 @@ impl Bindings {
                             return false;
                         }
 
-                        if arg.starts_with("-I")
-                            || arg.starts_with("--include-directory=")
+                        if arg.starts_with("-I") ||
+                            arg.starts_with("--include-directory=")
                         {
                             return false;
                         }
@@ -2630,8 +2630,8 @@ impl Bindings {
             debug!("Found clang: {:?}", clang);
 
             // Whether we are working with C or C++ inputs.
-            let is_cpp = args_are_cpp(&options.clang_args)
-                || options.input_headers.iter().any(|h| file_is_cpp(h));
+            let is_cpp = args_are_cpp(&options.clang_args) ||
+                options.input_headers.iter().any(|h| file_is_cpp(h));
 
             let search_paths = if is_cpp {
                 clang.cpp_search_paths
