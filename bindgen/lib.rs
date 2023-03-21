@@ -86,6 +86,8 @@ use std::rc::Rc;
 // Some convenient typedefs for a fast hash map and hash set.
 type HashMap<K, V> = ::rustc_hash::FxHashMap<K, V>;
 type HashSet<K> = ::rustc_hash::FxHashSet<K>;
+use crate::diagnostics::{Diagnostic, Slice};
+use annotate_snippets::snippet::AnnotationType;
 pub(crate) use std::collections::hash_map::Entry;
 
 /// Default prefix for the anon fields.
@@ -2839,6 +2841,7 @@ impl Bindings {
                 )),
                 Some(3) => {
                     warn!("Rustfmt could not format some lines.");
+                    simple_format_failure_diagnostic(&bindings, true);
                     Ok(Cow::Owned(bindings))
                 }
                 _ => Err(io::Error::new(
@@ -2848,6 +2851,25 @@ impl Bindings {
             },
             _ => Ok(Cow::Owned(source)),
         }
+    }
+}
+
+fn simple_format_failure_diagnostic(item: &str, emit_diagnostics: bool) {
+    if emit_diagnostics {
+        let mut slice = Slice::default();
+        slice.with_source(item);
+
+        Diagnostic::default()
+            .with_title(
+                "Rustfmt could not format some code",
+                AnnotationType::Warning,
+            )
+            .add_slice(slice)
+            .add_annotation(
+                format!("The lines that could not be formatted: {}", item),
+                AnnotationType::Note,
+            )
+            .display();
     }
 }
 

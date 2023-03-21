@@ -4251,8 +4251,8 @@ fn unsupported_abi_diagnostic<const VARIADIC: bool>(
                 fn_name,
                 if VARIADIC { "variadic " } else { "" },
                 abi), AnnotationType::Warning)
-        .add_annotation("No code will be generated for this function.", AnnotationType::Warning)
-        .add_annotation(format!("The configured Rust version is {}.", String::from(ctx.options().rust_target)), AnnotationType::Note);
+            .add_annotation("No code will be generated for this function.", AnnotationType::Warning)
+            .add_annotation(format!("The configured Rust version is {}.", String::from(ctx.options().rust_target)), AnnotationType::Note);
 
         if let Some(loc) = location {
             let (file, line, col, _) = loc.location();
@@ -4261,7 +4261,9 @@ fn unsupported_abi_diagnostic<const VARIADIC: bool>(
                     let mut source = String::new();
 
                     let file = BufReader::new(File::open(&name)?);
-                    if let Some(line) = file.lines().skip(line.wrapping_sub(1)).next() {
+                    if let Some(line) =
+                        file.lines().skip(line.wrapping_sub(1)).next()
+                    {
                         let line = line?;
                         source = line;
                     }

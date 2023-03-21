@@ -12,6 +12,8 @@ use crate::clang;
 use crate::clang::ClangToken;
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 
+use crate::diagnostics::Diagnostic;
+use annotate_snippets::snippet::AnnotationType;
 use std::io;
 use std::num::Wrapping;
 
@@ -213,7 +215,17 @@ impl ClangSubItemParser for Var {
 
                 if previously_defined {
                     let name = String::from_utf8(id).unwrap();
+                    let (file, line, column, _) = cursor.location().location();
                     warn!("Duplicated macro definition: {}", name);
+                    var_diagnostics(
+                        &name,
+                        file.name().unwrap(),
+                        line,
+                        column,
+                        "Duplicated macro definition",
+                        "This macro had a duplicate",
+                        true,
+                    );
                     return Err(ParseError::Continue);
                 }
 
@@ -422,4 +434,26 @@ fn get_integer_literal_from_cursor(cursor: &clang::Cursor) -> Option<i64> {
         }
     });
     value
+}
+
+fn var_diagnostics(
+    item: &str,
+    file_name: String,
+    line_num: usize,
+    column: usize,
+    msg: &str,
+    note: &str,
+    emit_diagnostics: bool,
+) {
+    if emit_diagnostics {
+        let mut slice = crate::diagnostics::Slice::default();
+        slice
+            .with_source(item)
+            .with_location(file_name, line_num, column);
+        Diagnostic::default()
+            .with_title(msg, AnnotationType::Warning)
+            .add_slice(slice)
+            .add_annotation(note, AnnotationType::Note)
+            .display();
+    }
 }
