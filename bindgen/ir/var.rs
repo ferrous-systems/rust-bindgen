@@ -12,8 +12,7 @@ use crate::clang;
 use crate::clang::ClangToken;
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 
-use crate::diagnostics::Diagnostic;
-use annotate_snippets::snippet::AnnotationType;
+use crate::diagnostics::{Diagnostic, Level};
 use std::io;
 use std::num::Wrapping;
 
@@ -216,7 +215,6 @@ impl ClangSubItemParser for Var {
                 if previously_defined {
                     let name = String::from_utf8(id).unwrap();
                     let (file, line, column, _) = cursor.location().location();
-                    warn!("Duplicated macro definition: {}", name);
                     var_diagnostics(
                         &name,
                         file.name().unwrap(),
@@ -445,15 +443,17 @@ fn var_diagnostics(
     note: &str,
     emit_diagnostics: bool,
 ) {
+    warn!("Duplicated macro definition: {}", item);
+
     if emit_diagnostics {
         let mut slice = crate::diagnostics::Slice::default();
         slice
             .with_source(item)
             .with_location(file_name, line_num, column);
         Diagnostic::default()
-            .with_title(msg, AnnotationType::Warning)
+            .with_title(msg, Level::Warn)
             .add_slice(slice)
-            .add_annotation(note, AnnotationType::Note)
+            .add_annotation(note, Level::Note)
             .display();
     }
 }

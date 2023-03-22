@@ -65,6 +65,7 @@ use ir::comment;
 pub use crate::codegen::{
     AliasVariation, EnumVariation, MacroTypeVariation, NonCopyUnionStyle,
 };
+use crate::diagnostics::{Diagnostic, Level, Slice};
 use crate::features::RustFeatures;
 pub use crate::features::{
     RustTarget, LATEST_STABLE_RUST, RUST_TARGET_STRINGS,
@@ -86,8 +87,7 @@ use std::rc::Rc;
 // Some convenient typedefs for a fast hash map and hash set.
 type HashMap<K, V> = ::rustc_hash::FxHashMap<K, V>;
 type HashSet<K> = ::rustc_hash::FxHashSet<K>;
-use crate::diagnostics::{Diagnostic, Slice};
-use annotate_snippets::snippet::AnnotationType;
+
 pub(crate) use std::collections::hash_map::Entry;
 
 /// Default prefix for the anon fields.
@@ -2860,14 +2860,11 @@ fn simple_format_failure_diagnostic(item: &str, emit_diagnostics: bool) {
         slice.with_source(item);
 
         Diagnostic::default()
-            .with_title(
-                "Rustfmt could not format some code",
-                AnnotationType::Warning,
-            )
+            .with_title("Rustfmt could not format some code", Level::Warn)
             .add_slice(slice)
             .add_annotation(
                 format!("The lines that could not be formatted: {}", item),
-                AnnotationType::Note,
+                Level::Note,
             )
             .display();
     }
