@@ -1013,11 +1013,19 @@ impl CodeGenerator for Type {
                     .iter()
                     .any(|p| ctx.resolve_type(*p).is_invalid_type_param())
                 {
+                    // TODO (amanjeev): how to test and give its own function
                     warn!(
                         "Item contained invalid template \
                          parameter: {:?}",
                         item
                     );
+                    let mut slice = crate::diagnostics::Slice::default();
+                    slice.with_source(item.id().canonical_name(ctx));
+                    crate::diagnostics::Diagnostic::default()
+                        .with_title("Tnvalid template parameter", crate::diagnostics::Level::Warn)
+                        .add_slice(slice)
+                        .add_annotation("Item contained invalid template parameter", crate::diagnostics::Level::Note)
+                        .display();
                     return;
                 }
                 let params: Vec<_> = params
@@ -2187,10 +2195,18 @@ impl CodeGenerator for CompInfo {
         // affect layout, so we're bad and pray to the gods for avoid sending
         // all the tests to shit when parsing things like max_align_t.
         if self.found_unknown_attr() {
+            // TODO (amanjeev): how to test and give its own function
             warn!(
                 "Type {} has an unknown attribute that may affect layout",
                 canonical_ident
             );
+            let mut slice = crate::diagnostics::Slice::default();
+            slice.with_source(canonical_ident.to_string());
+            crate::diagnostics::Diagnostic::default()
+                .with_title("Unknown attribute", crate::diagnostics::Level::Warn)
+                .add_slice(slice)
+                .add_annotation("Type has an unknown attribute that may affect layout", crate::diagnostics::Level::Note)
+                .display();
         }
 
         if all_template_params.is_empty() {
@@ -3055,10 +3071,15 @@ impl CodeGenerator for Enum {
                         _ => panic!("Unexpected type as enum repr"),
                     },
                     None => {
+                        // TODO (amanjeev): how to test and give its own function
                         warn!(
                             "Guessing type of enum! Forward declarations of enums \
                              shouldn't be legal!"
                         );
+                        crate::diagnostics::Diagnostic::default()
+                            .with_title("Forward declaration of enum", crate::diagnostics::Level::Warn)
+                            .add_annotation("Guessing the type of enum", crate::diagnostics::Level::Note)
+                            .display();
                         IntKind::Int
                     }
                 };
@@ -3079,10 +3100,15 @@ impl CodeGenerator for Enum {
                     (true, 8) => IntKind::I64,
                     (false, 8) => IntKind::U64,
                     _ => {
+                        // TODO (amanjeev): how to test and give its own function
                         warn!(
                             "invalid enum decl: signed: {}, size: {}",
                             signed, size
                         );
+                        crate::diagnostics::Diagnostic::default()
+                            .with_title("Invalid enum declaration", crate::diagnostics::Level::Warn)
+                            .add_annotation("The Sign or Size is invalid. Using the default.", crate::diagnostics::Level::Note)
+                            .display();
                         IntKind::I32
                     }
                 };
@@ -4235,13 +4261,21 @@ fn unsupported_abi_diagnostic<const VARIADIC: bool>(
     use crate::diagnostics::{Diagnostic, Level, Slice};
     use std::fs::File;
     use std::io::{self, BufReader};
-
+    // TODO (amanjeev): how to test and give its own function
     warn!(
         "Skipping {}function `{}` with the {} ABI that isn't supported by the configured Rust target",
         if VARIADIC { "variadic " } else { "" },
         fn_name,
         abi
     );
+    let mut slice = crate::diagnostics::Slice::default();
+    slice.with_source(fn_name.to_string());
+    slice.with_source(abi);
+    crate::diagnostics::Diagnostic::default()
+        .with_title("ABI isn't supported by the configured Rust target", crate::diagnostics::Level::Warn)
+        .add_slice(slice)
+        .add_annotation("Skipping function with the ABI that isn't supported by the configured Rust target", crate::diagnostics::Level::Note)
+        .display();
 
     if ctx.options().emit_diagnostics {
         let mut diag = Diagnostic::default();
