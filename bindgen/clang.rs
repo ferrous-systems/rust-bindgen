@@ -967,15 +967,7 @@ impl ClangToken {
             // expressions, so we strip them down here.
             CXToken_Comment => return None,
             _ => {
-                // TODO (amanjeev): how to test and give its own function
                 warn!("Found unexpected token kind: {:?}", self);
-                let mut slice = crate::diagnostics::Slice::default();
-                slice.with_source(self.kind.to_string());
-                crate::diagnostics::Diagnostic::default()
-                    .with_title("Found unexpected token", crate::diagnostics::Level::Warn)
-                    .add_slice(slice)
-                    .add_annotation("Cannot find the correct token kind", crate::diagnostics::Level::Note)
-                    .display();
                 return None;
             }
         };
