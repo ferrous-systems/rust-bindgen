@@ -8,7 +8,6 @@
 - [Does `bindgen` support the C++ Standard Template Library (STL)?](#does-bindgen-support-the-c-standard-template-library-stl)
 - [How to deal with bindgen generated padding fields?](#how-to-deal-with-bindgen-generated-padding-fields)
 - [How to generate bindings for a custom target?](#how-to-generate-bindings-for-a-custom-target)
-- [How can I normalize `#[doc]` attributes?](#how-can-i-normalize-doc-attributes)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -53,6 +52,13 @@ the `bindgen::Builder::generate_inline_functions` method or the
 Note that these functions and methods are usually marked inline for a reason:
 they tend to be hot. The above workaround makes them an out-of-line call, which
 might not provide acceptable performance.
+
+As an alternative, you can invoke `bindgen` with either the
+`bindgen::Builder::wrap_static_fns` method or the `--wrap-static-fns` flag.
+Which generates a C source file that can be compiled against the input headers
+to produce Rust headers for `static` and `static inline` functions. See [How to
+handle `static inline` functions](https://github.com/rust-lang/rust-bindgen/discussions/2405)
+for further information.
 
 ### Does `bindgen` support the C++ Standard Template Library (STL)?
 
@@ -109,19 +115,3 @@ $ bindgen <input_headers> -- --target=armv7a-none-eabi
 ```
 If you are using `bindgen` as a library, you should call
 `builder.clang_arg("--target=armv7a-none-eabi")` on your `builder`.
-
-### How can I normalize `#[doc]` attributes?
-
-`bindgen` emits all the documentation using `#[doc]` attributes by default. If
-you want to use the more user-friendly `///` syntax, you have to create a
-`rustfmt.toml` file with the following contents:
-
-```toml
-normalize_doc_attributes = true
-```
-
-Then, you have set up bindgen so it passes this file to `rustfmt`. Given that
-the `normalize_doc_attributes` option is
-[unstable](https://github.com/rust-lang/rustfmt/issues/3351), you also have to
-set up bindgen to use a `nightly` release of `rustfmt`. Please check the [code
-formatting](./code-formatting.md) section for further information.

@@ -25,6 +25,12 @@ impl Default for MacroParsingBehavior {
 /// A trait to allow configuring different kinds of types in different
 /// situations.
 pub trait ParseCallbacks: fmt::Debug {
+    #[cfg(feature = "__cli")]
+    #[doc(hidden)]
+    fn cli_args(&self) -> Vec<String> {
+        vec![]
+    }
+
     /// This function will be run on every macro that is identified.
     fn will_parse_macro(&self, _name: &str) -> MacroParsingBehavior {
         MacroParsingBehavior::Default
@@ -33,6 +39,15 @@ pub trait ParseCallbacks: fmt::Debug {
     /// This function will run for every extern variable and function. The returned value determines
     /// the name visible in the bindings.
     fn generated_name_override(
+        &self,
+        _item_info: ItemInfo<'_>,
+    ) -> Option<String> {
+        None
+    }
+
+    /// This function will run for every extern variable and function. The returned value determines
+    /// the link name in the bindings.
+    fn generated_link_name_override(
         &self,
         _item_info: ItemInfo<'_>,
     ) -> Option<String> {
@@ -87,6 +102,10 @@ pub trait ParseCallbacks: fmt::Debug {
     /// This will be called on every file inclusion, with the full path of the included file.
     fn include_file(&self, _filename: &str) {}
 
+    /// This will be called every time `bindgen` reads an environment variable whether it has any
+    /// content or not.
+    fn read_env_var(&self, _key: &str) {}
+
     /// This will be called to determine whether a particular blocklisted type
     /// implements a trait or not. This will be used to implement traits on
     /// other types containing the blocklisted type.
@@ -120,13 +139,27 @@ pub trait ParseCallbacks: fmt::Debug {
 
 /// Relevant information about a type to which new derive attributes will be added using
 /// [`ParseCallbacks::add_derives`].
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct DeriveInfo<'a> {
     /// The name of the type.
     pub name: &'a str,
+    /// The kind of the type.
+    pub kind: TypeKind,
 }
 
-/// An struct providing information about the item being passed to `ParseCallbacks::generated_name_override`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The kind of the current type.
+pub enum TypeKind {
+    /// The type is a Rust `struct`.
+    Struct,
+    /// The type is a Rust `enum`.
+    Enum,
+    /// The type is a Rust `union`.
+    Union,
+}
+
+/// A struct providing information about the item being passed to [`ParseCallbacks::generated_name_override`].
 #[non_exhaustive]
 pub struct ItemInfo<'a> {
     /// The name of the item
