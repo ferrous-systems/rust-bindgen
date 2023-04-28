@@ -204,7 +204,10 @@ header files.</p>
 <p>It is required to use Clang 5.0 or greater.</p>
 <h3><a class="header" href="#installing-clang" id="installing-clang">Installing Clang</a></h3>
 <h4><a class="header" href="#windows" id="windows">Windows</a></h4>
-<p>Download and install the official pre-built binary from
+<p>If you use winget:</p>
+<pre><code class="language-powershell">winget install LLVM.LLVM
+</code></pre>
+<p>Alternatively, you can download and install the official pre-built binary from
 <a href="http://releases.llvm.org/download.html">LLVM download page</a>.</p>
 <p>You will also need to set <code>LIBCLANG_PATH</code> as an <a href="https://www.techjunkie.com/environment-variables-windows-10/">environment
 variable</a> pointing
@@ -278,6 +281,12 @@ you're unsure.</p>
 <pre><code class="language-toml">[build-dependencies]
 bindgen = &quot;0.53.1&quot;
 </code></pre>
+<blockquote>
+<p>⚠️ <strong>Warning</strong></p>
+<p><code>bindgen</code> needs to be added to the <code>[build-dependencies]</code> section, not the normal
+<code>[dependencies]</code> section. If you add it as a regular dependency, you will get
+errors like the following: <code>error[E0463]: can't find crate for `bindgen`</code></p>
+</blockquote>
 <h1><a class="header" href="#create-a-wrapperh-header" id="create-a-wrapperh-header">Create a <code>wrapper.h</code> Header</a></h1>
 <p>The <code>wrapper.h</code> file will include all the various headers containing
 declarations of structs and functions we would like bindings for. In the
@@ -1028,6 +1037,29 @@ fn main() {
 }
 </code></pre>
 <p>These two methods also apply to any other toolchain available in your system.</p>
+<h2><a class="header" href="#using-prettyplease" id="using-prettyplease">Using <code>prettyplease</code></a></h2>
+<p>The <a href="https://github.com/dtolnay/prettyplease"><code>prettyplease</code></a> crate is a
+minimal formatter for generated code. To format bindings using <code>prettyplease</code>
+you have to invoke <code>bindgen</code> with either the <code>--formatter=prettyplease</code> flag or
+the the <code>bindgen::Builder::formatter(bindgen::Formatter::Prettyplease)</code>. One of
+its advantages is that <code>prettyplease</code> can be used in minimal environments where
+the Rust toolchain is not installed.</p>
+<h2><a class="header" href="#how-can-i-normalize-doc-attributes" id="how-can-i-normalize-doc-attributes">How can I normalize <code>#[doc]</code> attributes?</a></h2>
+<p><code>bindgen</code> emits all the documentation using <code>#[doc]</code> attributes by default. If
+you want to use the more user-friendly <code>///</code> syntax, you have two options:</p>
+<h3><a class="header" href="#use-rustfmt" id="use-rustfmt">Use <code>rustfmt</code></a></h3>
+<p><code>rustfmt</code> can be configured to normalize documentation. To do so, you have to
+create a <code>rustfmt.toml</code> file with the following contents:</p>
+<pre><code class="language-toml">normalize_doc_attributes = true
+</code></pre>
+<p>Then, you have set up <code>bindgen</code> so it passes this file to <code>rustfmt</code>. Given that
+the <code>normalize_doc_attributes</code> option is
+<a href="https://github.com/rust-lang/rustfmt/issues/3351">unstable</a>, you also have to
+set up bindgen to use a <code>nightly</code> release of <code>rustfmt</code>.</p>
+<h3><a class="header" href="#use-prettyplease" id="use-prettyplease">Use <code>prettyplease</code></a></h3>
+<p><code>prettyplease</code> normalizes documentation without any additional configuration.
+Then you just have to tell <code>bindgen</code> to use <code>prettyplease</code> as the code
+formatter.</p>
 <h1><a class="header" href="#generating-bindings-to-c" id="generating-bindings-to-c">Generating Bindings to C++</a></h1>
 <p><code>bindgen</code> can handle some C++ features, but not all of them. To set
 expectations: <code>bindgen</code> will give you the type definitions and FFI declarations
@@ -1123,6 +1155,67 @@ in the MSVC ABI (see <a href="https://learn.microsoft.com/en-us/cpp/build/x64-ca
 Because bindgen does not know about these rules generated interfaces using such types are currently invalid.</p>
 </li>
 </ul>
+<h2><a class="header" href="#constructor-semantics" id="constructor-semantics">Constructor semantics</a></h2>
+<p><code>bindgen</code> will generate a wrapper for any class constructor declared in the
+input headers. For example, this headers file</p>
+<pre><code class="language-c++">class MyClass {
+    public:
+	MyClass();
+        void method();
+};
+</code></pre>
+<p>Will produce the following code:</p>
+<pre><code class="language-rust ignore">#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct MyClass {
+    pub _address: u8,
+}
+extern &quot;C&quot; {
+    #[link_name = &quot;\u{1}_ZN7MyClass6methodEv&quot;]
+    pub fn MyClass_method(this: *mut MyClass);
+}
+extern &quot;C&quot; {
+    #[link_name = &quot;\u{1}_ZN7MyClassC1Ev&quot;]
+    pub fn MyClass_MyClass(this: *mut MyClass);
+}
+impl MyClass {
+    #[inline]
+    pub unsafe fn method(&amp;mut self) {
+        MyClass_method(self)
+    }
+    #[inline]
+    pub unsafe fn new() -&gt; Self {
+        let mut __bindgen_tmp = ::std::mem::MaybeUninit::uninit();
+        MyClass_MyClass(__bindgen_tmp.as_mut_ptr());
+        __bindgen_tmp.assume_init()
+    }
+}
+</code></pre>
+<p>This <code>MyClass::new</code> Rust method can be used as a substitute for the <code>MyClass</code>
+C++ constructor. However, the address of the value from inside the method will
+be different than from the outside. This is because the <code>__bindgen_tmp</code> value
+is moved when the <code>MyClass::new</code> method returns.</p>
+<p>In contrast, the C++ constructor will not move the value, meaning that the
+address of the value will be the same inside and outside the constructor.
+If the original C++ relies on this semantic difference somehow, you should use the
+<code>MyClass_MyClass</code> binding directly instead of the <code>MyClass::new</code> method.</p>
+<p>In other words, the Rust equivalent for the following C++ code</p>
+<pre><code class="language-c++">MyClass instance = MyClass();
+instance.method();
+</code></pre>
+<p>is not this</p>
+<pre><code class="language-rust ignore">let instance = MyClass::new();
+instance.method();
+</code></pre>
+<p>but this</p>
+<pre><code class="language-rust ignore">let instance = std::mem::MaybeUninit::&lt;MyClass&gt;::uninit();
+MyClass_MyClass(instance.as_mut_ptr());
+instance.assume_init_mut().method();
+</code></pre>
+<p>You can easily verify this fact if you provide a implementation for <code>MyClass</code>
+and <code>method</code> that prints the the <code>this</code> pointer address. However, you can
+ignore this fact if you know that the original C++ code does not rely on the
+instance address in its internal logic.</p>
 <h1><a class="header" href="#generating-bindings-to-objective-c" id="generating-bindings-to-objective-c">Generating Bindings to Objective-C</a></h1>
 <p><code>bindgen</code> does not (yet) have full objective-c support but it can generate bindings
 for a lot of the apple frameworks without too much blocklisting.</p>
@@ -1315,7 +1408,7 @@ fn bindgenunion() {
 <ul>
 <li>Immutable getter functions for each bitfield named <code>&lt;bitfield&gt;</code></li>
 <li>Setter functions for each contiguous block of bitfields named <code>set_&lt;bitfield&gt;</code></li>
-<li>Far each contiguous block of bitfields, Bindgen emits an opaque physical field that contains one or more logical bitfields</li>
+<li>For each contiguous block of bitfields, Bindgen emits an opaque physical field that contains one or more logical bitfields</li>
 <li>A static constructor  <code>new_bitfield_{1, 2, ...}</code> with a parameter for each bitfield contained within the opaque physical field.</li>
 </ul>
 <h2><a class="header" href="#bitfield-examples" id="bitfield-examples">Bitfield examples</a></h2>
@@ -1385,7 +1478,6 @@ StructWithBitfields: a:1, b:1, c:0
 <li><a href="faq.html#does-bindgen-support-the-c-standard-template-library-stl">Does <code>bindgen</code> support the C++ Standard Template Library (STL)?</a></li>
 <li><a href="faq.html#how-to-deal-with-bindgen-generated-padding-fields">How to deal with bindgen generated padding fields?</a></li>
 <li><a href="faq.html#how-to-generate-bindings-for-a-custom-target">How to generate bindings for a custom target?</a></li>
-<li><a href="faq.html#how-can-i-normalize-doc-attributes">How can I normalize <code>#[doc]</code> attributes?</a></li>
 </ul>
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 <h3><a class="header" href="#why-isnt-bindgen-generating-methods-for-this-allowlisted-class" id="why-isnt-bindgen-generating-methods-for-this-allowlisted-class">Why isn't <code>bindgen</code> generating methods for this allowlisted class?</a></h3>
@@ -1420,6 +1512,12 @@ the <code>bindgen::Builder::generate_inline_functions</code> method or the
 <p>Note that these functions and methods are usually marked inline for a reason:
 they tend to be hot. The above workaround makes them an out-of-line call, which
 might not provide acceptable performance.</p>
+<p>As an alternative, you can invoke <code>bindgen</code> with either the
+<code>bindgen::Builder::wrap_static_fns</code> method or the <code>--wrap-static-fns</code> flag.
+Which generates a C source file that can be compiled against the input headers
+to produce Rust headers for <code>static</code> and <code>static inline</code> functions. See <a href="https://github.com/rust-lang/rust-bindgen/discussions/2405">How to
+handle <code>static inline</code> functions</a>
+for further information.</p>
 <h3><a class="header" href="#does-bindgen-support-the-c-standard-template-library-stl" id="does-bindgen-support-the-c-standard-template-library-stl">Does <code>bindgen</code> support the C++ Standard Template Library (STL)?</a></h3>
 <p>Sort of. A little. Depends what you mean by &quot;support&quot;.</p>
 <p>Most functions, methods, constructors, and destructors are inline in the
@@ -1461,17 +1559,6 @@ like so:</p>
 </code></pre>
 <p>If you are using <code>bindgen</code> as a library, you should call
 <code>builder.clang_arg(&quot;--target=armv7a-none-eabi&quot;)</code> on your <code>builder</code>.</p>
-<h3><a class="header" href="#how-can-i-normalize-doc-attributes" id="how-can-i-normalize-doc-attributes">How can I normalize <code>#[doc]</code> attributes?</a></h3>
-<p><code>bindgen</code> emits all the documentation using <code>#[doc]</code> attributes by default. If
-you want to use the more user-friendly <code>///</code> syntax, you have to create a
-<code>rustfmt.toml</code> file with the following contents:</p>
-<pre><code class="language-toml">normalize_doc_attributes = true
-</code></pre>
-<p>Then, you have set up bindgen so it passes this file to <code>rustfmt</code>. Given that
-the <code>normalize_doc_attributes</code> option is
-<a href="https://github.com/rust-lang/rustfmt/issues/3351">unstable</a>, you also have to
-set up bindgen to use a <code>nightly</code> release of <code>rustfmt</code>. Please check the <a href="./code-formatting.html">code
-formatting</a> section for further information.</p>
 
                     </main>
 
