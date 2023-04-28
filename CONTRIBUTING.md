@@ -8,10 +8,11 @@ and introduce yourself.
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-
 - [Code of Conduct](#code-of-conduct)
 - [Filing an Issue](#filing-an-issue)
 - [Looking to Start Contributing to `bindgen`?](#looking-to-start-contributing-to-bindgen)
+- [Prerequisites](#prerequisites)
+  - [`rustfmt` / `cargo fmt`](#rustfmt--cargo-fmt)
 - [Building](#building)
 - [Testing](#testing)
   - [Overview](#overview)
@@ -24,6 +25,7 @@ and introduce yourself.
   - [Fuzzing `bindgen` with `csmith`](#fuzzing-bindgen-with-csmith)
   - [Property tests for `bindgen` with `quickchecking`](#property-tests-for-bindgen-with-quickchecking)
 - [Code Overview](#code-overview)
+  - [Implementing new options using `syn`](#implementing-new-options-using-syn)
 - [Pull Requests and Code Reviews](#pull-requests-and-code-reviews)
 - [Generating Graphviz Dot Files](#generating-graphviz-dot-files)
 - [Debug Logging](#debug-logging)
@@ -31,6 +33,11 @@ and introduce yourself.
   - [Getting `creduce`](#getting-creduce)
   - [Isolating Your Test Case](#isolating-your-test-case)
   - [Writing a Predicate Script](#writing-a-predicate-script)
+- [Cutting a new bindgen release](#cutting-a-new-bindgen-release)
+  - [Updating the changelog](#updating-the-changelog)
+  - [Bumping the version numbers.](#bumping-the-version-numbers)
+  - [Merge to `main`](#merge-to-main)
+  - [Publish and add a git tag for the right commit](#publish-and-add-a-git-tag-for-the-right-commit)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -58,6 +65,16 @@ issue, provide us with:
 * [Issues labeled "help wanted"](https://github.com/rust-lang/rust-bindgen/labels/help%20wanted)
 * Still can't find something to work on? [Drop a comment here](https://github.com/rust-lang/rust-bindgen/issues/747)
 
+## Prerequisites
+
+### `rustfmt` / `cargo fmt`
+
+We use `nightly` channel for `rustfmt` so please set the appropriate setting your editor/IDE for that.
+
+For rust-analyzer, you can set `rustfmt.extraArgs = ['+nightly']`.
+
+To check via command line, you can run `cargo +nightly fmt --check`.
+
 ## Building
 
 To build the `bindgen` library and the `bindgen` executable:
@@ -72,14 +89,6 @@ versions of llvm, or specify the path of the desired libclang explicitly:
 
 ```
 $ export LIBCLANG_PATH=path/to/clang-9.0/lib
-```
-
-Additionally, you may want to build and test with the `testing_only_docs`
-feature to ensure that you aren't forgetting to document types and functions. CI
-will catch it if you forget, but the turn around will be a lot slower ;)
-
-```
-$ cargo build --features testing_only_docs
 ```
 
 ## Testing
@@ -213,7 +222,7 @@ have. If for some reason it can't, you can force a specific `libclang` version
 to check the bindings against with a cargo feature:
 
 ```
-$ cargo test --features testing_only_libclang_$VERSION
+$ cargo test --features __testing_only_libclang_$VERSION
 ```
 
 Where `$VERSION` is one of:
@@ -336,7 +345,7 @@ the `codegen::postprocessing` module by following these steps:
 
 Ensure that each commit stands alone, and passes tests. This enables better `git
 bisect`ing when needed. If your commits do not stand on their own, then rebase
-them on top of the latest master and squash them into a single commit.
+them on top of the latest main and squash them into a single commit.
 
 All pull requests undergo code review before merging. To request review, comment
 `r? @github_username_of_reviewer`. They we will respond with `r+` to approve the
@@ -419,7 +428,7 @@ $ brew install creduce
 $ # Etc...
 ```
 
-Otherwise, follow [these instructions](https://github.com/csmith-project/creduce/blob/master/INSTALL.md) for building and/or installing `creduce`.
+Otherwise, follow [these instructions](https://github.com/csmith-project/creduce/blob/main/INSTALL.md) for building and/or installing `creduce`.
 
 Running `creduce` requires two things:
 
@@ -548,9 +557,9 @@ $ ./node_modules/doctoc/doctoc.js CHANGELOG.md
 Bump version numbers as needed. Run tests just to ensure everything is working
 as expected.
 
-### Merge to `master`
+### Merge to `main`
 
-For regular releases, the changes above should end up in `master` before
+For regular releases, the changes above should end up in `main` before
 publishing. For dot-releases of an old version (e.g., cherry-picking an
 important fix) you can skip this.
 
