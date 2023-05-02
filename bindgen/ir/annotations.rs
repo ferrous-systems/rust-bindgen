@@ -6,7 +6,9 @@
 
 use std::str::FromStr;
 
-use crate::clang;
+use ::clang::documentation::CommentChild;
+
+use crate::clang::{self, EntityExt};
 
 /// What kind of visibility modifer should be used for a struct or field?
 #[derive(Copy, PartialEq, Eq, Clone, Debug)]
@@ -121,10 +123,10 @@ fn parse_accessor(s: &str) -> FieldAccessorKind {
 impl Annotations {
     /// Construct new annotations for the given cursor and its bindgen comments
     /// (if any).
-    pub(crate) fn new(cursor: &clang::Cursor) -> Option<Annotations> {
+    pub(crate) fn new(cursor: clang::Cursor<'_>) -> Option<Annotations> {
         let mut anno = Annotations::default();
         let mut matched_one = false;
-        anno.parse(&cursor.comment(), &mut matched_one);
+        anno.parse(&cursor.comment()?, &mut matched_one);
 
         if matched_one {
             Some(anno)
@@ -205,47 +207,45 @@ impl Annotations {
     }
 
     fn parse(&mut self, comment: &clang::Comment, matched: &mut bool) {
-        use clang_sys::CXComment_HTMLStartTag;
-        if comment.kind() == CXComment_HTMLStartTag &&
-            comment.get_tag_name() == "div" &&
-            comment
-                .get_tag_attrs()
-                .next()
-                .map_or(false, |attr| attr.name == "rustbindgen")
-        {
-            *matched = true;
-            for attr in comment.get_tag_attrs() {
-                match attr.name.as_str() {
-                    "opaque" => self.opaque = true,
-                    "hide" => self.hide = true,
-                    "nocopy" => self.disallow_copy = true,
-                    "nodebug" => self.disallow_debug = true,
-                    "nodefault" => self.disallow_default = true,
-                    "mustusetype" => self.must_use_type = true,
-                    "replaces" => {
-                        self.use_instead_of = Some(
-                            attr.value.split("::").map(Into::into).collect(),
-                        )
+        for comment in comment.get_children() {
+            if let CommentChild::HtmlStartTag(tag) = comment {
+                if tag.name == "div" &&
+                    tag.attributes
+                        .first()
+                        .map_or(false, |(name, _)| name == "rustbindgen")
+                {
+                    *matched = true;
+                    for (name, value) in tag.attributes {
+                        match name.as_str() {
+                            "opaque" => self.opaque = true,
+                            "hide" => self.hide = true,
+                            "nocopy" => self.disallow_copy = true,
+                            "nodebug" => self.disallow_debug = true,
+                            "nodefault" => self.disallow_default = true,
+                            "mustusetype" => self.must_use_type = true,
+                            "replaces" => {
+                                self.use_instead_of = Some(
+                                    value.split("::").map(Into::into).collect(),
+                                )
+                            }
+                            "derive" => self.derives.push(value),
+                            "private" => {
+                                self.visibility_kind = if value != "false" {
+                                    Some(FieldVisibilityKind::Private)
+                                } else {
+                                    Some(FieldVisibilityKind::Public)
+                                };
+                            }
+                            "accessor" => {
+                                self.accessor_kind =
+                                    Some(parse_accessor(&value))
+                            }
+                            "constant" => self.constify_enum_variant = true,
+                            _ => {}
+                        }
                     }
-                    "derive" => self.derives.push(attr.value),
-                    "private" => {
-                        self.visibility_kind = if attr.value != "false" {
-                            Some(FieldVisibilityKind::Private)
-                        } else {
-                            Some(FieldVisibilityKind::Public)
-                        };
-                    }
-                    "accessor" => {
-                        self.accessor_kind = Some(parse_accessor(&attr.value))
-                    }
-                    "constant" => self.constify_enum_variant = true,
-                    _ => {}
                 }
             }
-        }
-
-        for child in comment.get_children() {
-            self.parse(&child, matched);
         }
     }
 

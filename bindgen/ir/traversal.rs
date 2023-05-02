@@ -352,7 +352,7 @@ where
 /// Trace all of the outgoing edges to other items. Implementations should call
 /// one of `tracer.visit(edge)` or `tracer.visit_kind(edge, EdgeKind::Whatever)`
 /// for each of their outgoing edges.
-pub(crate) trait Trace {
+pub(crate) trait Trace<'tu> {
     /// If a particular type needs extra information beyond what it has in
     /// `self` and `context` to find its referenced items, its implementation
     /// can define this associated type, forcing callers to pass the needed

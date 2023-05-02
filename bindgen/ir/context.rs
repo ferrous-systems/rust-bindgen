@@ -19,11 +19,12 @@ use super::module::{Module, ModuleKind};
 use super::template::{TemplateInstantiation, TemplateParameters};
 use super::traversal::{self, Edge, ItemTraversal};
 use super::ty::{FloatKind, Type, TypeKind};
-use crate::clang::{self, Cursor};
+use crate::clang::{self, Cursor, TranslationUnitExt, TypeExt};
 use crate::codegen::CodegenError;
 use crate::BindgenOptions;
 use crate::{Entry, HashMap, HashSet};
 
+use ::clang::Clang;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 use std::borrow::Cow;
@@ -31,6 +32,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap as StdHashMap};
 use std::iter::IntoIterator;
 use std::mem;
+use std::path::PathBuf;
 
 /// An identifier for some kind of IR item.
 #[derive(Debug, Copy, Clone, Eq, PartialOrd, Ord, Hash)]
@@ -357,7 +359,7 @@ pub(crate) struct BindgenContext {
     parsed_macros: StdHashMap<Vec<u8>, cexpr::expr::EvalResult>,
 
     /// A set of all the included filenames.
-    deps: BTreeSet<String>,
+    deps: BTreeSet<PathBuf>,
 
     /// The active replacements collected from replaces="xxx" annotations.
     replacements: HashMap<Vec<String>, ItemId>,
@@ -527,10 +529,7 @@ impl BindgenContext {
         // TODO(emilio): Use the CXTargetInfo here when available.
         //
         // see: https://reviews.llvm.org/D32389
-        let index = clang::Index::new(false, true);
-
-        let parse_options =
-            clang_sys::CXTranslationUnit_DetailedPreprocessingRecord;
+        let index = clang::Index::new(&Clang::new().unwrap(), false, true);
 
         let translation_unit = {
             let _t =
@@ -541,7 +540,7 @@ impl BindgenContext {
                 "",
                 &options.clang_args,
                 input_unsaved_files,
-                parse_options,
+                true,
             ).expect("libclang error; possible causes include:
 - Invalid flag syntax
 - Unrecognized flags
@@ -551,7 +550,7 @@ impl BindgenContext {
 If you encounter an error missing from this list, please file an issue or a PR!")
         };
 
-        let target_info = clang::TargetInfo::new(&translation_unit);
+        let target_info = translation_unit.get_target(); 
         let root_module = Self::build_root_module(ItemId(0));
         let root_module_id = root_module.id().as_module_id_unchecked();
 
@@ -635,7 +634,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     }
 
     /// Add another path to the set of included files.
-    pub(crate) fn include_file(&mut self, filename: String) {
+    pub(crate) fn include_file(&mut self, filename: PathBuf) {
         for cb in &self.options().parse_callbacks {
             cb.include_file(&filename);
         }
@@ -643,7 +642,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     }
 
     /// Get any included files.
-    pub(crate) fn deps(&self) -> &BTreeSet<String> {
+    pub(crate) fn deps(&self) -> &BTreeSet<PathBuf> {
         &self.deps
     }
 
@@ -1833,8 +1832,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         &mut self,
         with_id: ItemId,
         parent_id: Option<ItemId>,
-        ty: &clang::Type,
-        location: Option<clang::Cursor>,
+        ty: clang::Type<'_>,
+        location: Option<clang::Cursor<'_>>,
     ) -> Option<TypeId> {
         use clang_sys::{CXCursor_TypeAliasTemplateDecl, CXCursor_TypeRef};
         debug!(
@@ -1904,7 +1903,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: &clang::Type,
+        ty: clang::Type<'_>,
     ) -> TypeId {
         self.build_wrapper(with_id, wrapped_id, parent_id, ty, ty.is_const())
     }
@@ -1917,7 +1916,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: &clang::Type,
+        ty: clang::Type<'_>,
     ) -> TypeId {
         self.build_wrapper(
             with_id, wrapped_id, parent_id, ty, /* is_const = */ true,
@@ -1929,7 +1928,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: &clang::Type,
+        ty: clang::Type<'_>,
         is_const: bool,
     ) -> TypeId {
         let spelling = ty.spelling();
@@ -1956,41 +1955,46 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         ret
     }
 
-    fn build_builtin_ty(&mut self, ty: &clang::Type) -> Option<TypeId> {
-        use clang_sys::*;
+    fn build_builtin_ty(&mut self, ty: clang::Type<'_>) -> Option<TypeId> {
         let type_kind = match ty.kind() {
-            CXType_NullPtr => TypeKind::NullPtr,
-            CXType_Void => TypeKind::Void,
-            CXType_Bool => TypeKind::Int(IntKind::Bool),
-            CXType_Int => TypeKind::Int(IntKind::Int),
-            CXType_UInt => TypeKind::Int(IntKind::UInt),
-            CXType_Char_S => TypeKind::Int(IntKind::Char { is_signed: true }),
-            CXType_Char_U => TypeKind::Int(IntKind::Char { is_signed: false }),
-            CXType_SChar => TypeKind::Int(IntKind::SChar),
-            CXType_UChar => TypeKind::Int(IntKind::UChar),
-            CXType_Short => TypeKind::Int(IntKind::Short),
-            CXType_UShort => TypeKind::Int(IntKind::UShort),
-            CXType_WChar => TypeKind::Int(IntKind::WChar),
-            CXType_Char16 => TypeKind::Int(IntKind::U16),
-            CXType_Char32 => TypeKind::Int(IntKind::U32),
-            CXType_Long => TypeKind::Int(IntKind::Long),
-            CXType_ULong => TypeKind::Int(IntKind::ULong),
-            CXType_LongLong => TypeKind::Int(IntKind::LongLong),
-            CXType_ULongLong => TypeKind::Int(IntKind::ULongLong),
-            CXType_Int128 => TypeKind::Int(IntKind::I128),
-            CXType_UInt128 => TypeKind::Int(IntKind::U128),
-            CXType_Float => TypeKind::Float(FloatKind::Float),
-            CXType_Double => TypeKind::Float(FloatKind::Double),
-            CXType_LongDouble => TypeKind::Float(FloatKind::LongDouble),
-            CXType_Float128 => TypeKind::Float(FloatKind::Float128),
-            CXType_Complex => {
+            ::clang::TypeKind::NullPtr => TypeKind::NullPtr,
+            ::clang::TypeKind::Void => TypeKind::Void,
+            ::clang::TypeKind::Bool => TypeKind::Int(IntKind::Bool),
+            ::clang::TypeKind::Int => TypeKind::Int(IntKind::Int),
+            ::clang::TypeKind::UInt => TypeKind::Int(IntKind::UInt),
+            ::clang::TypeKind::CharS => {
+                TypeKind::Int(IntKind::Char { is_signed: true })
+            }
+            ::clang::TypeKind::CharU => {
+                TypeKind::Int(IntKind::Char { is_signed: false })
+            }
+            ::clang::TypeKind::SChar => TypeKind::Int(IntKind::SChar),
+            ::clang::TypeKind::UChar => TypeKind::Int(IntKind::UChar),
+            ::clang::TypeKind::Short => TypeKind::Int(IntKind::Short),
+            ::clang::TypeKind::UShort => TypeKind::Int(IntKind::UShort),
+            ::clang::TypeKind::WChar => TypeKind::Int(IntKind::WChar),
+            ::clang::TypeKind::Char16 => TypeKind::Int(IntKind::U16),
+            ::clang::TypeKind::Char32 => TypeKind::Int(IntKind::U32),
+            ::clang::TypeKind::Long => TypeKind::Int(IntKind::Long),
+            ::clang::TypeKind::ULong => TypeKind::Int(IntKind::ULong),
+            ::clang::TypeKind::LongLong => TypeKind::Int(IntKind::LongLong),
+            ::clang::TypeKind::ULongLong => TypeKind::Int(IntKind::ULongLong),
+            ::clang::TypeKind::Int128 => TypeKind::Int(IntKind::I128),
+            ::clang::TypeKind::UInt128 => TypeKind::Int(IntKind::U128),
+            ::clang::TypeKind::Float => TypeKind::Float(FloatKind::Float),
+            ::clang::TypeKind::Double => TypeKind::Float(FloatKind::Double),
+            ::clang::TypeKind::LongDouble => {
+                TypeKind::Float(FloatKind::LongDouble)
+            }
+            ::clang::TypeKind::Float128 => TypeKind::Float(FloatKind::Float128),
+            ::clang::TypeKind::Complex => {
                 let float_type =
                     ty.elem_type().expect("Not able to resolve complex type?");
                 let float_kind = match float_type.kind() {
-                    CXType_Float => FloatKind::Float,
-                    CXType_Double => FloatKind::Double,
-                    CXType_LongDouble => FloatKind::LongDouble,
-                    CXType_Float128 => FloatKind::Float128,
+                    ::clang::TypeKind::Float => FloatKind::Float,
+                    ::clang::TypeKind::Double => FloatKind::Double,
+                    ::clang::TypeKind::LongDouble => FloatKind::LongDouble,
+                    ::clang::TypeKind::Float128 => FloatKind::Float128,
                     _ => panic!(
                         "Non floating-type complex? {:?}, {:?}",
                         ty, float_type,

@@ -163,9 +163,9 @@ pub(crate) trait TemplateParameters: Sized {
 }
 
 /// A trait for things which may or may not be a named template type parameter.
-pub(crate) trait AsTemplateParam {
+pub(crate) trait AsTemplateParam<'tu> {
     /// Any extra information the implementor might need to make this decision.
-    type Extra;
+    type Extra: 'tu;
 
     /// Convert this thing to the item ID of a named template type parameter.
     fn as_template_param(

@@ -1,5 +1,7 @@
 //! Intermediate representation of variables.
 
+use ::clang::EntityKind;
+
 use super::super::codegen::MacroTypeVariation;
 use super::context::{BindgenContext, TypeId};
 use super::dot::DotAttributes;
@@ -8,8 +10,7 @@ use super::int::IntKind;
 use super::item::Item;
 use super::ty::{FloatKind, TypeKind};
 use crate::callbacks::{ItemInfo, ItemKind, MacroParsingBehavior};
-use crate::clang;
-use crate::clang::ClangToken;
+use crate::clang::{self, EntityExt};
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 
 use std::io;
@@ -159,16 +160,17 @@ fn default_macro_constant_type(ctx: &BindgenContext, value: i64) -> IntKind {
 /// Parses tokens from a CXCursor_MacroDefinition pointing into a function-like
 /// macro, and calls the func_macro callback.
 fn handle_function_macro(
-    cursor: &clang::Cursor,
+    cursor: clang::Cursor<'_>,
     callbacks: &dyn crate::callbacks::ParseCallbacks,
 ) {
-    let is_closing_paren = |t: &ClangToken| {
+    let is_closing_paren = |t: &::clang::token::Token| {
         // Test cheap token kind before comparing exact spellings.
-        t.kind == clang_sys::CXToken_Punctuation && t.spelling() == b")"
+        t.get_kind() == ::clang::token::TokenKind::Punctuation &&
+            t.get_spelling() == ")"
     };
     let tokens: Vec<_> = cursor.tokens().iter().collect();
     if let Some(boundary) = tokens.iter().position(is_closing_paren) {
-        let mut spelled = tokens.iter().map(ClangToken::spelling);
+        let mut spelled = tokens.iter().map(|t| t.get_spelling());
         // Add 1, to convert index to length.
         let left = spelled.by_ref().take(boundary + 1);
         let left = left.collect::<Vec<_>>().concat();
@@ -180,10 +182,10 @@ fn handle_function_macro(
 }
 
 impl ClangSubItemParser for Var {
-    fn parse(
-        cursor: clang::Cursor,
+    fn parse<'tu>(
+        cursor: clang::Cursor<'tu>,
         ctx: &mut BindgenContext,
-    ) -> Result<ParseResult<Self>, ParseError> {
+    ) -> Result<ParseResult<'tu, Self>, ParseError> {
         use cexpr::expr::EvalResult;
         use cexpr::literal::CChar;
         use clang_sys::*;
@@ -280,7 +282,7 @@ impl ClangSubItemParser for Var {
                     Some(cursor),
                 ))
             }
-            CXCursor_VarDecl => {
+            EntityKind::VarDecl => {
                 let mut name = cursor.spelling();
                 if cursor.linkage() == CXLinkage_External {
                     if let Some(nm) = ctx.options().last_callback(|callbacks| {

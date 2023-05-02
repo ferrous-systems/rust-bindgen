@@ -17,14 +17,14 @@ pub(crate) enum ParseError {
 
 /// The result of parsing a Clang AST node.
 #[derive(Debug)]
-pub(crate) enum ParseResult<T> {
+pub(crate) enum ParseResult<'tu, T> {
     /// We've already resolved this item before, here is the extant `ItemId` for
     /// it.
     AlreadyResolved(ItemId),
 
     /// This is a newly parsed item. If the cursor is `Some`, it points to the
     /// AST node where the new `T` was declared.
-    New(T, Option<clang::Cursor>),
+    New(T, Option<clang::Cursor<'tu>>),
 }
 
 /// An intermediate representation "sub-item" (i.e. one of the types contained
@@ -34,8 +34,8 @@ pub(crate) trait ClangSubItemParser: Sized {
     ///
     /// The fact that is a reference guarantees it's held by the context, and
     /// allow returning already existing types.
-    fn parse(
-        cursor: clang::Cursor,
+    fn parse<'tu>(
+        cursor: clang::Cursor<'tu>,
         context: &mut BindgenContext,
-    ) -> Result<ParseResult<Self>, ParseError>;
+    ) -> Result<ParseResult<'tu, Self>, ParseError>;
 }

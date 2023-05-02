@@ -28,6 +28,7 @@ path = "lib.rs"
 bitflags = "2.2.1"
 cexpr = "0.6"
 clang-sys = { version = "1", features = ["clang_6_0"] }
+clang = { version = "2", features = ["clang_6_0"] }
 lazycell = "1"
 lazy_static = "1"
 peeking_take_while = "0.1.2"

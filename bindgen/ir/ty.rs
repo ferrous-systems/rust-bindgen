@@ -667,8 +667,8 @@ impl Type {
     /// comments in every special case justify why they're there.
     pub(crate) fn from_clang_ty(
         potential_id: ItemId,
-        ty: &clang::Type,
-        location: Cursor,
+        ty: clang::Type<'_>,
+        location: Cursor<'_>,
         parent_id: Option<ItemId>,
         ctx: &mut BindgenContext,
     ) -> Result<ParseResult<Self>, ParseError> {

@@ -7,9 +7,12 @@ use super::item::Item;
 use super::traversal::{EdgeKind, Trace, Tracer};
 use super::ty::TypeKind;
 use crate::callbacks::{ItemInfo, ItemKind};
-use crate::clang::{self, Attribute};
+use crate::clang::{self, Attribute, EntityExt, TypeExt};
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
-use clang_sys::{self, CXCallingConv};
+use ::clang::{
+    Accessibility, CallingConvention, EntityKind, EntityVisitResult, Visibility,
+};
+use clang_sys::CXCallingConv_Invalid;
 
 use quote::TokenStreamExt;
 use std::io;
@@ -29,14 +32,16 @@ pub(crate) enum FunctionKind {
 impl FunctionKind {
     /// Given a clang cursor, return the kind of function it represents, or
     /// `None` otherwise.
-    pub(crate) fn from_cursor(cursor: &clang::Cursor) -> Option<FunctionKind> {
+    pub(crate) fn from_cursor(
+        cursor: clang::Cursor<'_>,
+    ) -> Option<FunctionKind> {
         // FIXME(emilio): Deduplicate logic with `ir::comp`.
         Some(match cursor.kind() {
-            clang_sys::CXCursor_FunctionDecl => FunctionKind::Function,
-            clang_sys::CXCursor_Constructor => {
+            EntityKind::FunctionDecl => FunctionKind::Function,
+            EntityKind::Constructor => {
                 FunctionKind::Method(MethodKind::Constructor)
             }
-            clang_sys::CXCursor_Destructor => {
+            EntityKind::Destructor => {
                 FunctionKind::Method(if cursor.method_is_virtual() {
                     MethodKind::VirtualDestructor {
                         pure_virtual: cursor.method_is_pure_virtual(),
@@ -45,7 +50,7 @@ impl FunctionKind {
                     MethodKind::Destructor
                 })
             }
-            clang_sys::CXCursor_CXXMethod => {
+            EntityKind::Method => {
                 if cursor.method_is_virtual() {
                     FunctionKind::Method(MethodKind::Virtual {
                         pure_virtual: cursor.method_is_pure_virtual(),
@@ -242,7 +247,7 @@ pub(crate) enum ClangAbi {
     /// An ABI known by Rust.
     Known(Abi),
     /// An unknown or invalid ABI.
-    Unknown(CXCallingConv),
+    Unknown(clang_sys::CXCallingConv),
 }
 
 impl ClangAbi {
@@ -288,18 +293,19 @@ pub(crate) struct FunctionSig {
     abi: ClangAbi,
 }
 
-fn get_abi(cc: CXCallingConv) -> ClangAbi {
-    use clang_sys::*;
+fn get_abi(cc: Option<CallingConvention>) -> ClangAbi {
     match cc {
-        CXCallingConv_Default => ClangAbi::Known(Abi::C),
-        CXCallingConv_C => ClangAbi::Known(Abi::C),
-        CXCallingConv_X86StdCall => ClangAbi::Known(Abi::Stdcall),
-        CXCallingConv_X86FastCall => ClangAbi::Known(Abi::Fastcall),
-        CXCallingConv_X86ThisCall => ClangAbi::Known(Abi::ThisCall),
-        CXCallingConv_X86VectorCall => ClangAbi::Known(Abi::Vectorcall),
-        CXCallingConv_AAPCS => ClangAbi::Known(Abi::Aapcs),
-        CXCallingConv_X86_64Win64 => ClangAbi::Known(Abi::Win64),
-        other => ClangAbi::Unknown(other),
+        Some(cc) => match cc {
+            CallingConvention::Cdecl => ClangAbi::Known(Abi::C),
+            CallingConvention::Stdcall => ClangAbi::Known(Abi::Stdcall),
+            CallingConvention::Fastcall => ClangAbi::Known(Abi::Fastcall),
+            CallingConvention::Thiscall => ClangAbi::Known(Abi::ThisCall),
+            CallingConvention::Vectorcall => ClangAbi::Known(Abi::Vectorcall),
+            CallingConvention::Aapcs => ClangAbi::Known(Abi::Aapcs),
+            CallingConvention::Win64 => ClangAbi::Known(Abi::Win64),
+            other => ClangAbi::Unknown(other as _),
+        },
+        None => ClangAbi::Unknown(CXCallingConv_Invalid),
     }
 }
 
@@ -319,8 +325,8 @@ pub(crate) fn cursor_mangling(
         return None;
     }
 
-    let is_destructor = cursor.kind() == clang_sys::CXCursor_Destructor;
-    if let Ok(mut manglings) = cursor.cxx_manglings() {
+    let is_destructor = cursor.kind() == EntityKind::Destructor;
+    if let Some(mut manglings) = cursor.cxx_manglings() {
         while let Some(m) = manglings.pop() {
             // Only generate the destructor group 1, see below.
             if is_destructor && !m.ends_with("D1Ev") {
@@ -367,8 +373,8 @@ pub(crate) fn cursor_mangling(
 }
 
 fn args_from_ty_and_cursor(
-    ty: &clang::Type,
-    cursor: &clang::Cursor,
+    ty: clang::Type<'_>,
+    cursor: clang::Cursor<'_>,
     ctx: &mut BindgenContext,
 ) -> Vec<(Option<String>, TypeId)> {
     let cursor_args = cursor.args().unwrap_or_default().into_iter();
@@ -397,8 +403,8 @@ fn args_from_ty_and_cursor(
                 }
             });
 
-            let cursor = arg_cur.unwrap_or(*cursor);
-            let ty = arg_ty.unwrap_or_else(|| cursor.cur_type());
+            let cursor = arg_cur.unwrap_or(cursor);
+            let ty = arg_ty.unwrap_or_else(|| cursor.cur_type().unwrap());
             (name, Item::from_ty_or_ref(ty, cursor, None, ctx))
         })
         .collect()
@@ -407,16 +413,15 @@ fn args_from_ty_and_cursor(
 impl FunctionSig {
     /// Construct a new function signature from the given Clang type.
     pub(crate) fn from_ty(
-        ty: &clang::Type,
-        cursor: &clang::Cursor,
+        ty: clang::Type<'_>,
+        cursor: clang::Cursor<'_>,
         ctx: &mut BindgenContext,
     ) -> Result<Self, ParseError> {
-        use clang_sys::*;
         debug!("FunctionSig::from_ty {:?} {:?}", ty, cursor);
 
         // Skip function templates
         let kind = cursor.kind();
-        if kind == CXCursor_FunctionTemplate {
+        if kind == EntityKind::FunctionTemplate {
             return Err(ParseError::Continue);
         }
 
@@ -434,40 +439,44 @@ impl FunctionSig {
         // Constructors of non-type template parameter classes for some reason
         // include the template parameter in their name. Just skip them, since
         // we don't handle well non-type template parameters anyway.
-        if (kind == CXCursor_Constructor || kind == CXCursor_Destructor) &&
+        if (kind == EntityKind::Constructor || kind == EntityKind::Destructor) &&
             spelling.contains('<')
         {
             return Err(ParseError::Continue);
         }
 
         let cursor = if cursor.is_valid() {
-            *cursor
+            cursor
         } else {
-            ty.declaration()
+            ty.declaration().unwrap()
         };
 
         let mut args = match kind {
-            CXCursor_FunctionDecl |
-            CXCursor_Constructor |
-            CXCursor_CXXMethod |
-            CXCursor_ObjCInstanceMethodDecl |
-            CXCursor_ObjCClassMethodDecl => {
-                args_from_ty_and_cursor(ty, &cursor, ctx)
+            EntityKind::FunctionDecl |
+            EntityKind::Constructor |
+            EntityKind::Method |
+            EntityKind::ObjCInstanceMethodDecl |
+            EntityKind::ObjCClassMethodDecl => {
+                args_from_ty_and_cursor(ty, cursor, ctx)
             }
             _ => {
                 // For non-CXCursor_FunctionDecl, visiting the cursor's children
                 // is the only reliable way to get parameter names.
                 let mut args = vec![];
                 cursor.visit(|c| {
-                    if c.kind() == CXCursor_ParmDecl {
-                        let ty =
-                            Item::from_ty_or_ref(c.cur_type(), c, None, ctx);
+                    if c.kind() == EntityKind::ParmDecl {
+                        let ty = Item::from_ty_or_ref(
+                            c.cur_type().unwrap(),
+                            c,
+                            None,
+                            ctx,
+                        );
                         let name = c.spelling();
                         let name =
                             if name.is_empty() { None } else { Some(name) };
                         args.push((name, ty));
                     }
-                    CXChildVisit_Continue
+                    EntityVisitResult::Continue
                 });
 
                 if args.is_empty() {
@@ -475,7 +484,7 @@ impl FunctionSig {
                     // right AST for functions tagged as stdcall and such...
                     //
                     // https://bugs.llvm.org/show_bug.cgi?id=45919
-                    args_from_ty_and_cursor(ty, &cursor, ctx)
+                    args_from_ty_and_cursor(ty, cursor, ctx)
                 } else {
                     args
                 }
@@ -499,11 +508,11 @@ impl FunctionSig {
         is_divergent =
             is_divergent || ty.spelling().contains("__attribute__((noreturn))");
 
-        let is_method = kind == CXCursor_CXXMethod;
-        let is_constructor = kind == CXCursor_Constructor;
-        let is_destructor = kind == CXCursor_Destructor;
+        let is_method = kind == EntityKind::Method;
+        let is_constructor = kind == EntityKind::Constructor;
+        let is_destructor = kind == EntityKind::Destructor;
         if (is_constructor || is_destructor || is_method) &&
-            cursor.lexical_parent() != cursor.semantic_parent()
+            cursor.lexical_parent() != Some(cursor.semantic_parent())
         {
             // Only parse constructors once.
             return Err(ParseError::Continue);
@@ -527,7 +536,7 @@ impl FunctionSig {
                         const_class_id,
                         class,
                         None,
-                        &parent.cur_type(),
+                        parent.cur_type().unwrap(),
                     )
                 } else {
                     class
@@ -544,8 +553,8 @@ impl FunctionSig {
             }
         }
 
-        let ty_ret_type = if kind == CXCursor_ObjCInstanceMethodDecl ||
-            kind == CXCursor_ObjCClassMethodDecl
+        let ty_ret_type = if kind == EntityKind::ObjCInstanceMethodDecl ||
+            kind == EntityKind::ObjCClassMethodDecl
         {
             ty.ret_type()
                 .or_else(|| cursor.ret_type())
@@ -566,10 +575,12 @@ impl FunctionSig {
         // Clang plays with us at "find the calling convention", see #549 and
         // co. This seems to be a better fix than that commit.
         let mut call_conv = ty.call_conv();
-        if let Some(ty) = cursor.cur_type().canonical_type().pointee_type() {
-            let cursor_call_conv = ty.call_conv();
-            if cursor_call_conv != CXCallingConv_Invalid {
-                call_conv = cursor_call_conv;
+        if let Some(ty) = cursor
+            .cur_type()
+            .and_then(|ty| ty.canonical_type().pointee_type())
+        {
+            if let Some(cursor_call_conv) = ty.call_conv() {
+                call_conv = Some(cursor_call_conv);
             }
         }
 
@@ -668,31 +679,31 @@ impl FunctionSig {
 }
 
 impl ClangSubItemParser for Function {
-    fn parse(
-        cursor: clang::Cursor,
+    fn parse<'tu>(
+        cursor: clang::Cursor<'tu>,
         context: &mut BindgenContext,
-    ) -> Result<ParseResult<Self>, ParseError> {
-        use clang_sys::*;
-
-        let kind = match FunctionKind::from_cursor(&cursor) {
+    ) -> Result<ParseResult<'tu, Self>, ParseError> {
+        let kind = match FunctionKind::from_cursor(cursor) {
             None => return Err(ParseError::Continue),
             Some(k) => k,
         };
 
         debug!("Function::parse({:?}, {:?})", cursor, cursor.cur_type());
         let visibility = cursor.visibility();
-        if visibility != CXVisibility_Default {
+        if visibility != Some(Visibility::Default) {
             return Err(ParseError::Continue);
         }
 
-        if cursor.access_specifier() == CX_CXXPrivate {
+        if cursor.access_specifier() == Some(Accessibility::Private) {
             return Err(ParseError::Continue);
         }
 
-        let linkage = cursor.linkage();
+        let linkage = cursor.linkage().unwrap();
         let linkage = match linkage {
-            CXLinkage_External | CXLinkage_UniqueExternal => Linkage::External,
-            CXLinkage_Internal => Linkage::Internal,
+            ::clang::Linkage::External | ::clang::Linkage::UniqueExternal => {
+                Linkage::External
+            }
+            ::clang::Linkage::Internal => Linkage::Internal,
             _ => return Err(ParseError::Continue),
         };
 
@@ -721,12 +732,13 @@ impl ClangSubItemParser for Function {
         }
 
         // Grab the signature using Item::from_ty.
-        let sig = Item::from_ty(&cursor.cur_type(), cursor, None, context)?;
+        let sig =
+            Item::from_ty(cursor.cur_type().unwrap(), cursor, None, context)?;
 
         let mut name = cursor.spelling();
         assert!(!name.is_empty(), "Empty function name?");
 
-        if cursor.kind() == CXCursor_Destructor {
+        if cursor.kind() == EntityKind::Destructor {
             // Remove the leading `~`. The alternative to this is special-casing
             // code-generation for destructor functions, which seems less than
             // ideal.
@@ -771,7 +783,7 @@ impl ClangSubItemParser for Function {
     }
 }
 
-impl Trace for FunctionSig {
+impl<'tu> Trace<'tu> for FunctionSig {
     type Extra = ();
 
     fn trace<T>(&self, _: &BindgenContext, tracer: &mut T, _: &())

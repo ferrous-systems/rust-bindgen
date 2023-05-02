@@ -46,9 +46,13 @@ mod clang;
 mod diagnostics;
 mod features;
 mod ir;
+mod new_clang;
 mod parse;
 mod regex_set;
 
+use crate::clang::EntityExt;
+use ::clang::diagnostic::Severity;
+use ::clang::EntityVisitResult;
 pub use codegen::{
     AliasVariation, EnumVariation, MacroTypeVariation, NonCopyUnionStyle,
 };
@@ -329,7 +333,9 @@ impl Builder {
         let input_unsaved_files =
             std::mem::take(&mut self.options.input_header_contents)
                 .into_iter()
-                .map(|(name, contents)| clang::UnsavedFile::new(name, contents))
+                .map(|(name, contents)| {
+                    (clang::UnsavedFile::new(name, contents), name)
+                })
                 .collect::<Vec<_>>();
 
         Bindings::generate(self.options, input_unsaved_files)
@@ -717,7 +723,7 @@ impl Bindings {
     /// Generate bindings for the given options.
     pub(crate) fn generate(
         mut options: BindgenOptions,
-        input_unsaved_files: Vec<clang::UnsavedFile>,
+        input_unsaved_files: Vec<(clang::UnsavedFile, String)>,
     ) -> Result<Bindings, BindgenError> {
         ensure_libclang_is_loaded();
 
@@ -853,11 +859,11 @@ impl Bindings {
             }
         }
 
-        for (idx, f) in input_unsaved_files.iter().enumerate() {
+        for (idx, (f, name)) in input_unsaved_files.iter().enumerate() {
             if idx != 0 || !options.input_headers.is_empty() {
                 options.clang_args.push("-include".to_owned());
             }
-            options.clang_args.push(f.name.to_str().unwrap().to_owned())
+            options.clang_args.push(name.to_owned())
         }
 
         debug!("Fixed-up options: {:?}", options);
@@ -1071,12 +1077,11 @@ fn parse_one(
     ctx: &mut BindgenContext,
     cursor: clang::Cursor,
     parent: Option<ItemId>,
-) -> clang_sys::CXChildVisitResult {
+) -> ::clang::EntityVisitResult {
     if !filter_builtins(ctx, &cursor) {
-        return CXChildVisit_Continue;
+        return ::clang::EntityVisitResult::Continue;
     }
 
-    use clang_sys::CXChildVisit_Continue;
     match Item::parse(cursor, parent, ctx) {
         Ok(..) => {}
         Err(ParseError::Continue) => {}
@@ -1084,17 +1089,15 @@ fn parse_one(
             cursor.visit(|child| parse_one(ctx, child, parent));
         }
     }
-    CXChildVisit_Continue
+    ::clang::EntityVisitResult::Continue
 }
 
 /// Parse the Clang AST into our `Item` internal representation.
 fn parse(context: &mut BindgenContext) -> Result<(), BindgenError> {
-    use clang_sys::*;
-
     let mut error = None;
-    for d in context.translation_unit().diags().iter() {
-        let msg = d.format();
-        let is_err = d.severity() >= CXDiagnostic_Error;
+    for d in context.translation_unit().get_diagnostics().iter() {
+        let msg = d.get_text();
+        let is_err = d.get_severity() >= Severity::Error;
         if is_err {
             let error = error.get_or_insert_with(String::new);
             error.push_str(&msg);
@@ -1108,17 +1111,17 @@ fn parse(context: &mut BindgenContext) -> Result<(), BindgenError> {
         return Err(BindgenError::ClangDiagnostic(message));
     }
 
-    let cursor = context.translation_unit().cursor();
+    let cursor = context.translation_unit().get_entity();
 
     if context.options().emit_ast {
-        fn dump_if_not_builtin(cur: &clang::Cursor) -> CXChildVisitResult {
+        fn dump_if_not_builtin(cur: clang::Cursor) -> EntityVisitResult {
             if !cur.is_builtin() {
                 clang::ast_dump(cur, 0)
             } else {
-                CXChildVisit_Continue
+                EntityVisitResult::Continue
             }
         }
-        cursor.visit(|cur| dump_if_not_builtin(&cur));
+        cursor.visit(|cur| dump_if_not_builtin(cur));
     }
 
     let root = context.root_module();
@@ -1216,8 +1219,8 @@ fn get_target_dependent_env_var(
 pub struct CargoCallbacks;
 
 impl callbacks::ParseCallbacks for CargoCallbacks {
-    fn include_file(&self, filename: &str) {
-        println!("cargo:rerun-if-changed={}", filename);
+    fn include_file(&self, filename: &Path) {
+        println!("cargo:rerun-if-changed={}", filename.display());
     }
 
     fn read_env_var(&self, key: &str) {

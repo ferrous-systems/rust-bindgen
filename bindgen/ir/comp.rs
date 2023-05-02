@@ -9,12 +9,13 @@ use super::layout::Layout;
 use super::template::TemplateParameters;
 use super::traversal::{EdgeKind, Trace, Tracer};
 use super::ty::RUST_DERIVE_IN_ARRAY_LIMIT;
-use crate::clang;
+use crate::clang::{self, EntityExt, TypeExt};
 use crate::codegen::struct_layout::{align_to, bytes_from_bits_pow2};
 use crate::ir::derive::CanDeriveCopy;
 use crate::parse::ParseError;
 use crate::HashMap;
 use crate::NonCopyUnionStyle;
+use ::clang::{EntityKind, EntityVisitResult, Linkage, Visibility};
 use peeking_take_while::PeekableExt;
 use std::cmp;
 use std::io;
@@ -144,7 +145,7 @@ pub(crate) trait FieldMethods {
     fn comment(&self) -> Option<&str>;
 
     /// If this is a bitfield, how many bits does it need?
-    fn bitfield_width(&self) -> Option<u32>;
+    fn bitfield_width(&self) -> Option<usize>;
 
     /// Is this feild declared public?
     fn is_public(&self) -> bool;
@@ -208,7 +209,7 @@ impl Field {
     }
 }
 
-impl Trace for Field {
+impl<'tu> Trace<'tu> for Field {
     type Extra = ();
 
     fn trace<T>(&self, _: &BindgenContext, tracer: &mut T, _: &())
@@ -346,7 +347,7 @@ impl Bitfield {
     }
 
     /// Get the bit width of this bitfield.
-    pub(crate) fn width(&self) -> u32 {
+    pub(crate) fn width(&self) -> usize {
         self.data.bitfield_width().unwrap()
     }
 
@@ -394,7 +395,7 @@ impl FieldMethods for Bitfield {
         self.data.comment()
     }
 
-    fn bitfield_width(&self) -> Option<u32> {
+    fn bitfield_width(&self) -> Option<usize> {
         self.data.bitfield_width()
     }
 
@@ -425,7 +426,7 @@ impl RawField {
         ty: TypeId,
         comment: Option<String>,
         annotations: Option<Annotations>,
-        bitfield_width: Option<u32>,
+        bitfield_width: Option<usize>,
         public: bool,
         offset: Option<usize>,
     ) -> RawField {
@@ -454,7 +455,7 @@ impl FieldMethods for RawField {
         self.0.comment()
     }
 
-    fn bitfield_width(&self) -> Option<u32> {
+    fn bitfield_width(&self) -> Option<usize> {
         self.0.bitfield_width()
     }
 
@@ -826,7 +827,7 @@ impl CompFields {
     }
 }
 
-impl Trace for CompFields {
+impl<'tu> Trace<'tu> for CompFields {
     type Extra = ();
 
     fn trace<T>(&self, context: &BindgenContext, tracer: &mut T, _: &())
@@ -865,7 +866,7 @@ pub(crate) struct FieldData {
     annotations: Annotations,
 
     /// If this field is a bitfield, and how many bits does it contain if it is.
-    bitfield_width: Option<u32>,
+    bitfield_width: Option<usize>,
 
     /// If the C++ field is declared `public`
     public: bool,
@@ -887,7 +888,7 @@ impl FieldMethods for FieldData {
         self.comment.as_deref()
     }
 
-    fn bitfield_width(&self) -> Option<u32> {
+    fn bitfield_width(&self) -> Option<usize> {
         self.bitfield_width
     }
 
@@ -1235,17 +1236,16 @@ impl CompInfo {
         location: Option<clang::Cursor>,
         ctx: &mut BindgenContext,
     ) -> Result<Self, ParseError> {
-        use clang_sys::*;
         assert!(
             ty.template_args().is_none(),
             "We handle template instantiations elsewhere"
         );
 
-        let mut cursor = ty.declaration();
-        let mut kind = Self::kind_from_cursor(&cursor);
+        let mut cursor = ty.declaration().unwrap();
+        let mut kind = Self::kind_from_cursor(cursor);
         if kind.is_err() {
             if let Some(location) = location {
-                kind = Self::kind_from_cursor(&location);
+                kind = Self::kind_from_cursor(location);
                 cursor = location;
             }
         }
@@ -1257,19 +1257,20 @@ impl CompInfo {
         let mut ci = CompInfo::new(kind);
         ci.is_forward_declaration =
             location.map_or(true, |cur| match cur.kind() {
-                CXCursor_ParmDecl => true,
-                CXCursor_StructDecl | CXCursor_UnionDecl |
-                CXCursor_ClassDecl => !cur.is_definition(),
+                EntityKind::ParmDecl => true,
+                EntityKind::StructDecl |
+                EntityKind::UnionDecl |
+                EntityKind::ClassDecl => !cur.is_definition(),
                 _ => false,
             });
 
         let mut maybe_anonymous_struct_field = None;
         cursor.visit(|cur| {
-            if cur.kind() != CXCursor_FieldDecl {
+            if cur.kind() != EntityKind::FieldDecl {
                 if let Some((ty, clang_ty, public, offset)) =
                     maybe_anonymous_struct_field.take()
                 {
-                    if cur.kind() == CXCursor_TypedefDecl &&
+                    if cur.kind() == EntityKind::TypedefDecl &&
                         cur.typedef_type().unwrap().canonical_type() ==
                             clang_ty
                     {
@@ -1287,16 +1288,16 @@ impl CompInfo {
             }
 
             match cur.kind() {
-                CXCursor_FieldDecl => {
+                EntityKind::FieldDecl => {
                     if let Some((ty, clang_ty, public, offset)) =
                         maybe_anonymous_struct_field.take()
                     {
                         let mut used = false;
                         cur.visit(|child| {
-                            if child.cur_type() == clang_ty {
+                            if child.cur_type() == Some(clang_ty) {
                                 used = true;
                             }
-                            CXChildVisit_Continue
+                            EntityVisitResult::Continue
                         });
 
                         if !used {
@@ -1314,7 +1315,7 @@ impl CompInfo {
                         // evaluated.
                         if width.is_none() {
                             ci.has_unevaluable_bit_field_width = true;
-                            return CXChildVisit_Break;
+                            return EntityVisitResult::Break;
                         }
 
                         width
@@ -1323,14 +1324,14 @@ impl CompInfo {
                     };
 
                     let field_type = Item::from_ty_or_ref(
-                        cur.cur_type(),
+                        cur.cur_type().unwrap(),
                         cur,
                         Some(potential_id),
                         ctx,
                     );
 
                     let comment = cur.raw_comment();
-                    let annotations = Annotations::new(&cur);
+                    let annotations = Annotations::new(cur);
                     let name = cur.spelling();
                     let is_public = cur.public_accessible();
                     let offset = cur.offset_of_field().ok();
@@ -1357,23 +1358,23 @@ impl CompInfo {
 
                     // No we look for things like attributes and stuff.
                     cur.visit(|cur| {
-                        if cur.kind() == CXCursor_UnexposedAttr {
+                        if cur.kind() == EntityKind::UnexposedAttr {
                             ci.found_unknown_attr = true;
                         }
-                        CXChildVisit_Continue
+                        EntityVisitResult::Continue
                     });
                 }
-                CXCursor_UnexposedAttr => {
+                EntityKind::UnexposedAttr => {
                     ci.found_unknown_attr = true;
                 }
-                CXCursor_EnumDecl |
-                CXCursor_TypeAliasDecl |
-                CXCursor_TypeAliasTemplateDecl |
-                CXCursor_TypedefDecl |
-                CXCursor_StructDecl |
-                CXCursor_UnionDecl |
-                CXCursor_ClassTemplate |
-                CXCursor_ClassDecl => {
+                EntityKind::EnumDecl |
+                EntityKind::TypeAliasDecl |
+                EntityKind::TypeAliasTemplateDecl |
+                EntityKind::TypedefDecl |
+                EntityKind::StructDecl |
+                EntityKind::UnionDecl |
+                EntityKind::ClassTemplate |
+                EntityKind::ClassDecl => {
                     // We can find non-semantic children here, clang uses a
                     // StructDecl to note incomplete structs that haven't been
                     // forward-declared before, see [1].
@@ -1389,7 +1390,7 @@ impl CompInfo {
                     let is_inner_struct =
                         cur.semantic_parent() == cursor || cur.is_definition();
                     if !is_inner_struct {
-                        return CXChildVisit_Continue;
+                        return EntityVisitResult::Continue;
                     }
 
                     // Even if this is a definition, we may not be the semantic
@@ -1407,9 +1408,10 @@ impl CompInfo {
 
                         // A declaration of an union or a struct without name
                         // could also be an unnamed field, unfortunately.
-                        if cur.is_anonymous() && cur.kind() != CXCursor_EnumDecl
+                        if cur.is_anonymous() &&
+                            cur.kind() != EntityKind::EnumDecl
                         {
-                            let ty = cur.cur_type();
+                            let ty = cur.cur_type().unwrap();
                             let public = cur.public_accessible();
                             let offset = cur.offset_of_field().ok();
 
@@ -1418,17 +1420,17 @@ impl CompInfo {
                         }
                     }
                 }
-                CXCursor_PackedAttr => {
+                EntityKind::PackedAttr => {
                     ci.packed_attr = true;
                 }
-                CXCursor_TemplateTypeParameter => {
+                EntityKind::TemplateTypeParameter => {
                     let param = Item::type_param(None, cur, ctx).expect(
                         "Item::type_param should't fail when pointing \
                          at a TemplateTypeParameter",
                     );
                     ci.template_params.push(param);
                 }
-                CXCursor_CXXBaseSpecifier => {
+                EntityKind::BaseSpecifier => {
                     let is_virtual_base = cur.is_virtual_base();
                     ci.has_own_virtual_method |= is_virtual_base;
 
@@ -1443,22 +1445,23 @@ impl CompInfo {
                         n => format!("_base_{}", n),
                     };
                     let type_id =
-                        Item::from_ty_or_ref(cur.cur_type(), cur, None, ctx);
+                        Item::from_ty_or_ref(cur.cur_type().unwrap(), cur, None, ctx);
                     ci.base_members.push(Base {
                         ty: type_id,
                         kind,
                         field_name,
                         is_pub: cur.access_specifier() ==
-                            clang_sys::CX_CXXPublic,
+                            Some(::clang::Accessibility::Public)
                     });
                 }
-                CXCursor_Constructor | CXCursor_Destructor |
-                CXCursor_CXXMethod => {
+                EntityKind::Constructor |
+                EntityKind::Destructor |
+                EntityKind::Method => {
                     let is_virtual = cur.method_is_virtual();
                     let is_static = cur.method_is_static();
                     debug_assert!(!(is_static && is_virtual), "How?");
 
-                    ci.has_destructor |= cur.kind() == CXCursor_Destructor;
+                    ci.has_destructor |= cur.kind() == EntityKind::Destructor;
                     ci.has_own_virtual_method |= is_virtual;
 
                     // This used to not be here, but then I tried generating
@@ -1472,7 +1475,7 @@ impl CompInfo {
                     // but also instantiated, and we wouldn't be able to call
                     // them, so just bail out.
                     if !ci.template_params.is_empty() {
-                        return CXChildVisit_Continue;
+                        return EntityVisitResult::Continue;
                     }
 
                     // NB: This gets us an owned `Function`, not a
@@ -1487,16 +1490,16 @@ impl CompInfo {
                             {
                                 item
                             }
-                            _ => return CXChildVisit_Continue,
+                            _ => return EntityVisitResult::Continue,
                         };
 
                     let signature = signature.expect_function_id(ctx);
 
                     match cur.kind() {
-                        CXCursor_Constructor => {
+                        EntityKind::Constructor => {
                             ci.constructors.push(signature);
                         }
-                        CXCursor_Destructor => {
+                        EntityKind::Destructor => {
                             let kind = if is_virtual {
                                 MethodKind::VirtualDestructor {
                                     pure_virtual: cur.method_is_pure_virtual(),
@@ -1506,7 +1509,7 @@ impl CompInfo {
                             };
                             ci.destructor = Some((kind, signature));
                         }
-                        CXCursor_CXXMethod => {
+                        EntityKind::Method => {
                             let is_const = cur.method_is_const();
                             let method_kind = if is_static {
                                 MethodKind::Static
@@ -1526,20 +1529,20 @@ impl CompInfo {
                         _ => unreachable!("How can we see this here?"),
                     }
                 }
-                CXCursor_NonTypeTemplateParameter => {
+                EntityKind::NonTypeTemplateParameter => {
                     ci.has_non_type_template_params = true;
                 }
-                CXCursor_VarDecl => {
+                EntityKind::VarDecl => {
                     let linkage = cur.linkage();
-                    if linkage != CXLinkage_External &&
-                        linkage != CXLinkage_UniqueExternal
+                    if linkage != Some(Linkage::External) &&
+                        linkage != Some(Linkage::UniqueExternal)
                     {
-                        return CXChildVisit_Continue;
+                        return EntityVisitResult::Continue;
                     }
 
                     let visibility = cur.visibility();
-                    if visibility != CXVisibility_Default {
-                        return CXChildVisit_Continue;
+                    if visibility != Some(Visibility::Default) {
+                        return EntityVisitResult::Continue;
                     }
 
                     if let Ok(item) = Item::parse(cur, Some(potential_id), ctx)
@@ -1548,13 +1551,13 @@ impl CompInfo {
                     }
                 }
                 // Intentionally not handled
-                CXCursor_CXXAccessSpecifier |
-                CXCursor_CXXFinalAttr |
-                CXCursor_FunctionTemplate |
-                CXCursor_ConversionFunction => {}
+                EntityKind::AccessSpecifier |
+                EntityKind::FinalAttr |
+                EntityKind::FunctionTemplate |
+                EntityKind::ConversionFunction => {}
                 _ => {
                     warn!(
-                        "unhandled comp member `{}` (kind {:?}) in `{}` ({})",
+                        "unhandled comp member `{:?}` (kind {:?}) in `{:?}` ({:?})",
                         cur.spelling(),
                         clang::kind_to_str(cur.kind()),
                         cursor.spelling(),
@@ -1562,7 +1565,7 @@ impl CompInfo {
                     );
                 }
             }
-            CXChildVisit_Continue
+            EntityVisitResult::Continue
         });
 
         if let Some((ty, _, public, offset)) = maybe_anonymous_struct_field {
@@ -1575,16 +1578,15 @@ impl CompInfo {
     }
 
     fn kind_from_cursor(
-        cursor: &clang::Cursor,
+        cursor: clang::Cursor<'_>,
     ) -> Result<CompKind, ParseError> {
-        use clang_sys::*;
         Ok(match cursor.kind() {
-            CXCursor_UnionDecl => CompKind::Union,
-            CXCursor_ClassDecl | CXCursor_StructDecl => CompKind::Struct,
-            CXCursor_CXXBaseSpecifier |
-            CXCursor_ClassTemplatePartialSpecialization |
-            CXCursor_ClassTemplate => match cursor.template_kind() {
-                CXCursor_UnionDecl => CompKind::Union,
+            EntityKind::UnionDecl => CompKind::Union,
+            EntityKind::ClassDecl | EntityKind::StructDecl => CompKind::Struct,
+            EntityKind::BaseSpecifier |
+            EntityKind::ClassTemplatePartialSpecialization |
+            EntityKind::ClassTemplate => match cursor.template_kind() {
+                Some(EntityKind::UnionDecl) => CompKind::Union,
                 _ => CompKind::Struct,
             },
             _ => {
@@ -1796,7 +1798,7 @@ impl IsOpaque for CompInfo {
                     .resolve_type(bf.ty())
                     .layout(ctx)
                     .expect("Bitfield without layout? Gah!");
-                bf.width() / 8 > bitfield_layout.size as u32
+                bf.width() / 8 > bitfield_layout.size
             }),
         }) {
             return true;
@@ -1829,8 +1831,8 @@ impl TemplateParameters for CompInfo {
     }
 }
 
-impl Trace for CompInfo {
-    type Extra = Item;
+impl<'tu> Trace<'tu> for CompInfo {
+    type Extra = Item<'tu>;
 
     fn trace<T>(&self, context: &BindgenContext, tracer: &mut T, item: &Item)
     where

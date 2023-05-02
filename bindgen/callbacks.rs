@@ -5,6 +5,7 @@ pub use crate::ir::derive::CanDerive as ImplementsTrait;
 pub use crate::ir::enum_ty::{EnumVariantCustomBehavior, EnumVariantValue};
 pub use crate::ir::int::IntKind;
 use std::fmt;
+use std::path::Path;
 
 /// An enum to allow ignoring parsing of macros.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -100,7 +101,7 @@ pub trait ParseCallbacks: fmt::Debug {
     }
 
     /// This will be called on every file inclusion, with the full path of the included file.
-    fn include_file(&self, _filename: &str) {}
+    fn include_file(&self, _filename: &Path) {}
 
     /// This will be called every time `bindgen` reads an environment variable whether it has any
     /// content or not.

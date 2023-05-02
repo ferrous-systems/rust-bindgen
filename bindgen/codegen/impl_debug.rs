@@ -109,7 +109,7 @@ impl<'a> ImplDebug<'a> for BitfieldUnit {
     }
 }
 
-impl<'a> ImplDebug<'a> for Item {
+impl<'a> ImplDebug<'a> for Item<'a> {
     type Extra = &'a str;
 
     fn impl_debug(
