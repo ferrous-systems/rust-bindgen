@@ -6,7 +6,7 @@
 
 use std::str::FromStr;
 
-use crate::clang;
+use crate::clang_ext;
 
 /// What kind of visibility modifer should be used for a struct or field?
 #[derive(Copy, PartialEq, Eq, Clone, Debug)]
@@ -121,7 +121,7 @@ fn parse_accessor(s: &str) -> FieldAccessorKind {
 impl Annotations {
     /// Construct new annotations for the given cursor and its bindgen comments
     /// (if any).
-    pub(crate) fn new(cursor: &clang::Cursor) -> Option<Annotations> {
+    pub(crate) fn new(cursor: &clang_ext::Cursor) -> Option<Annotations> {
         let mut anno = Annotations::default();
         let mut matched_one = false;
         anno.parse(&cursor.comment(), &mut matched_one);
@@ -204,7 +204,7 @@ impl Annotations {
         self.accessor_kind
     }
 
-    fn parse(&mut self, comment: &clang::Comment, matched: &mut bool) {
+    fn parse(&mut self, comment: &clang_ext::Comment, matched: &mut bool) {
         use clang_sys::CXComment_HTMLStartTag;
         if comment.kind() == CXComment_HTMLStartTag &&
             comment.get_tag_name() == "div" &&

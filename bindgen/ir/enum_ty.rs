@@ -4,7 +4,7 @@ use super::super::codegen::EnumVariation;
 use super::context::{BindgenContext, TypeId};
 use super::item::Item;
 use super::ty::{Type, TypeKind};
-use crate::clang;
+use crate::clang_ext;
 use crate::ir::annotations::Annotations;
 use crate::parse::ParseError;
 use crate::regex_set::RegexSet;
@@ -55,7 +55,7 @@ impl Enum {
 
     /// Construct an enumeration from the given Clang type.
     pub(crate) fn from_ty(
-        ty: &clang::Type,
+        ty: &clang_ext::Type,
         ctx: &mut BindgenContext,
     ) -> Result<Self, ParseError> {
         use clang_sys::*;

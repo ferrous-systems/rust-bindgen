@@ -5,7 +5,8 @@
 #![deny(clippy::missing_docs_in_private_items)]
 
 use crate::ir::context::BindgenContext;
-use clang_sys::*;
+use clang::token::TokenKind;
+use clang::{Entity, EntityKind, EntityVisitResult};
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::hash::Hash;
@@ -19,31 +20,31 @@ use std::{mem, ptr, slice};
 /// function.
 pub(crate) struct Attribute {
     name: &'static [u8],
-    kind: Option<CXCursorKind>,
-    token_kind: CXTokenKind,
+    kind: Option<EntityKind>,
+    token_kind: TokenKind,
 }
 
 impl Attribute {
     /// A `warn_unused_result` attribute.
     pub(crate) const MUST_USE: Self = Self {
         name: b"warn_unused_result",
-        // FIXME(emilio): clang-sys doesn't expose `CXCursor_WarnUnusedResultAttr` (from clang 9).
-        kind: Some(440),
-        token_kind: CXToken_Identifier,
+        // FIXME(emilio): clang-sys doesn't expose `EntityKind::WarnUnusedResultAttr` (from clang 9).
+        kind: Some(EntityKind::WarnUnusedResultAttr),
+        token_kind: TokenKind::Identifier,
     };
 
     /// A `_Noreturn` attribute.
     pub(crate) const NO_RETURN: Self = Self {
         name: b"_Noreturn",
         kind: None,
-        token_kind: CXToken_Keyword,
+        token_kind: TokenKind::Keyword,
     };
 
     /// A `[[noreturn]]` attribute.
     pub(crate) const NO_RETURN_CPP: Self = Self {
         name: b"noreturn",
         kind: None,
-        token_kind: CXToken_Identifier,
+        token_kind: TokenKind::Identifier,
     };
 }
 
@@ -51,11 +52,11 @@ impl Attribute {
 ///
 /// We call the AST node pointed to by the cursor the cursor's "referent".
 #[derive(Copy, Clone)]
-pub(crate) struct Cursor {
-    x: CXCursor,
+pub(crate) struct Cursor<'tu> {
+    entity: Option<Entity<'tu>>,
 }
 
-impl fmt::Debug for Cursor {
+impl<'tu> fmt::Debug for Cursor<'tu> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(
             fmt,
@@ -68,33 +69,28 @@ impl fmt::Debug for Cursor {
     }
 }
 
-impl Cursor {
+impl<'tu> Cursor<'tu> {
     /// Get the Unified Symbol Resolution for this cursor's referent, if
     /// available.
     ///
     /// The USR can be used to compare entities across translation units.
     pub(crate) fn usr(&self) -> Option<String> {
-        let s = unsafe { cxstring_into_string(clang_getCursorUSR(self.x)) };
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
+        Some(self.entity.as_ref()?.get_usr()?.0)
     }
 
     /// Is this cursor's referent a declaration?
     pub(crate) fn is_declaration(&self) -> bool {
-        unsafe { clang_isDeclaration(self.kind()) != 0 }
+        self.entity.map(|e| e.is_declaration()).unwrap_or_default()
     }
 
     /// Is this cursor's referent an anonymous record or so?
     pub(crate) fn is_anonymous(&self) -> bool {
-        unsafe { clang_Cursor_isAnonymous(self.x) != 0 }
+        self.entity.map(|e| e.is_anonymous()).unwrap_or_default()
     }
 
     /// Get this cursor's referent's spelling.
     pub(crate) fn spelling(&self) -> String {
-        unsafe { cxstring_into_string(clang_getCursorSpelling(self.x)) }
+        self.entity.and_then(|e| e.get_name()).unwrap_or_default()
     }
 
     /// Get this cursor's referent's display name.
@@ -102,39 +98,31 @@ impl Cursor {
     /// This is not necessarily a valid identifier. It includes extra
     /// information, such as parameters for a function, etc.
     pub(crate) fn display_name(&self) -> String {
-        unsafe { cxstring_into_string(clang_getCursorDisplayName(self.x)) }
+        self.entity
+            .and_then(|e| e.get_display_name())
+            .unwrap_or_default()
     }
 
     /// Get the mangled name of this cursor's referent.
     pub(crate) fn mangling(&self) -> String {
-        unsafe { cxstring_into_string(clang_Cursor_getMangling(self.x)) }
+        self.entity
+            .and_then(|e| e.get_mangled_name())
+            .unwrap_or_default()
     }
 
     /// Gets the C++ manglings for this cursor, or an error if the manglings
     /// are not available.
     pub(crate) fn cxx_manglings(&self) -> Result<Vec<String>, ()> {
-        use clang_sys::*;
-        unsafe {
-            let manglings = clang_Cursor_getCXXManglings(self.x);
-            if manglings.is_null() {
-                return Err(());
-            }
-            let count = (*manglings).Count as usize;
-
-            let mut result = Vec::with_capacity(count);
-            for i in 0..count {
-                let string_ptr = (*manglings).Strings.add(i);
-                result.push(cxstring_to_string_leaky(*string_ptr));
-            }
-            clang_disposeStringSet(manglings);
-            Ok(result)
-        }
+        self.entity.and_then(|e| e.get_mangled_names()).ok_or(())
     }
 
     /// Returns whether the cursor refers to a built-in definition.
     pub(crate) fn is_builtin(&self) -> bool {
-        let (file, _, _, _) = self.location().location();
-        file.name().is_none()
+        self.entity
+            .and_then(|e| {
+                Some(e.get_location()?.get_file_location().file.is_none())
+            })
+            .unwrap_or_default()
     }
 
     /// Get the `Cursor` for this cursor's referent's lexical parent.
@@ -155,10 +143,8 @@ impl Cursor {
     /// void Foo::method() { /* ... */ }
     /// ```
     pub(crate) fn lexical_parent(&self) -> Cursor {
-        unsafe {
-            Cursor {
-                x: clang_getCursorLexicalParent(self.x),
-            }
+        Cursor {
+            entity: self.entity.and_then(|e| e.get_lexical_parent()),
         }
     }
 
@@ -167,15 +153,12 @@ impl Cursor {
     /// See documentation for `lexical_parent` for details on semantic vs
     /// lexical parents.
     pub(crate) fn fallible_semantic_parent(&self) -> Option<Cursor> {
-        let sp = unsafe {
-            Cursor {
-                x: clang_getCursorSemanticParent(self.x),
-            }
-        };
-        if sp == *self || !sp.is_valid() {
-            return None;
+        match self.entity {
+            Some(ref e) => Some(Cursor {
+                entity: Some(e.get_semantic_parent()?),
+            }),
+            None => Some(Cursor { entity: None }),
         }
-        Some(sp)
     }
 
     /// Get the referent's semantic parent.
@@ -192,24 +175,15 @@ impl Cursor {
     ///
     /// NOTE: This may not return `Some` for partial template specializations,
     /// see #193 and #194.
-    pub(crate) fn num_template_args(&self) -> Option<u32> {
+    pub(crate) fn num_template_args(&self) -> Option<usize> {
         // XXX: `clang_Type_getNumTemplateArguments` is sort of reliable, while
         // `clang_Cursor_getNumTemplateArguments` is totally unreliable.
         // Therefore, try former first, and only fallback to the latter if we
         // have to.
+
         self.cur_type()
             .num_template_args()
-            .or_else(|| {
-                let n: c_int =
-                    unsafe { clang_Cursor_getNumTemplateArguments(self.x) };
-
-                if n >= 0 {
-                    Some(n as u32)
-                } else {
-                    debug_assert_eq!(n, -1);
-                    None
-                }
-            })
+            .or_else(|| Some(self.entity?.get_template_arguments()?.len()))
             .or_else(|| {
                 let canonical = self.canonical();
                 if canonical != *self {
@@ -228,14 +202,13 @@ impl Cursor {
     /// think we can survive fine without it.
     pub(crate) fn translation_unit(&self) -> Cursor {
         assert!(self.is_valid());
-        unsafe {
-            let tu = clang_Cursor_getTranslationUnit(self.x);
-            let cursor = Cursor {
-                x: clang_getTranslationUnitCursor(tu),
-            };
-            assert!(cursor.is_valid());
-            cursor
-        }
+        let cursor = Cursor {
+            entity: Some(
+                self.entity.unwrap().get_translation_unit().get_entity(),
+            ),
+        };
+        assert!(cursor.is_valid());
+        cursor
     }
 
     /// Is the referent a top level construct?
@@ -243,10 +216,11 @@ impl Cursor {
         let mut semantic_parent = self.fallible_semantic_parent();
 
         while semantic_parent.is_some() &&
-            (semantic_parent.unwrap().kind() == CXCursor_Namespace ||
+            (semantic_parent.unwrap().kind() == EntityKind::Namespace ||
                 semantic_parent.unwrap().kind() ==
-                    CXCursor_NamespaceAlias ||
-                semantic_parent.unwrap().kind() == CXCursor_NamespaceRef)
+                    EntityKind::NamespaceAlias ||
+                semantic_parent.unwrap().kind() ==
+                    EntityKind::NamespaceRef)
         {
             semantic_parent =
                 semantic_parent.unwrap().fallible_semantic_parent();
@@ -263,25 +237,27 @@ impl Cursor {
     pub(crate) fn is_template_like(&self) -> bool {
         matches!(
             self.kind(),
-            CXCursor_ClassTemplate |
-                CXCursor_ClassTemplatePartialSpecialization |
-                CXCursor_TypeAliasTemplateDecl
+            Some(EntityKind::ClassTemplate) |
+                Some(EntityKind::ClassTemplatePartialSpecialization) |
+                Some(EntityKind::TypeAliasTemplateDecl)
         )
     }
 
     /// Is this Cursor pointing to a function-like macro definition?
     pub(crate) fn is_macro_function_like(&self) -> bool {
-        unsafe { clang_Cursor_isMacroFunctionLike(self.x) != 0 }
+        self.entity
+            .map(|e| e.is_function_like_macro())
+            .unwrap_or_default()
     }
 
     /// Get the kind of referent this cursor is pointing to.
-    pub(crate) fn kind(&self) -> CXCursorKind {
-        self.x.kind
+    pub(crate) fn kind(&self) -> Option<EntityKind> {
+        self.entity.map(|e| e.get_kind())
     }
 
     /// Returns true if the cursor is a definition
     pub(crate) fn is_definition(&self) -> bool {
-        unsafe { clang_isCursorDefinition(self.x) != 0 }
+        self.entity.map(|e| e.is_definition()).unwrap_or_default()
     }
 
     /// Is the referent a template specialization?
@@ -293,8 +269,8 @@ impl Cursor {
     /// remaining free template arguments?
     pub(crate) fn is_fully_specialized_template(&self) -> bool {
         self.is_template_specialization() &&
-            self.kind() != CXCursor_ClassTemplatePartialSpecialization &&
-            self.num_template_args().unwrap_or(0) > 0
+            self.kind() !=
+                Some(EntityKind::ClassTemplatePartialSpecialization)
     }
 
     /// Is the referent a template specialization that still has remaining free
@@ -320,9 +296,9 @@ impl Cursor {
     pub(crate) fn is_template_parameter(&self) -> bool {
         matches!(
             self.kind(),
-            CXCursor_TemplateTemplateParameter |
-                CXCursor_TemplateTypeParameter |
-                CXCursor_NonTypeTemplateParameter
+            Some(EntityKind::TemplateTemplateParameter) |
+                Some(EntityKind::TemplateTypeParameter) |
+                Some(EntityKind::NonTypeTemplateParameter)
         )
     }
 
@@ -331,29 +307,29 @@ impl Cursor {
         fn visitor(
             found_template_parameter: &mut bool,
             cur: Cursor,
-        ) -> CXChildVisitResult {
+        ) -> EntityVisitResult {
             // If we found a template parameter, it is dependent.
             if cur.is_template_parameter() {
                 *found_template_parameter = true;
-                return CXChildVisit_Break;
+                return EntityVisitResult::Break;
             }
 
             // Get the referent and traverse it as well.
             if let Some(referenced) = cur.referenced() {
                 if referenced.is_template_parameter() {
                     *found_template_parameter = true;
-                    return CXChildVisit_Break;
+                    return EntityVisitResult::Break;
                 }
 
                 referenced
                     .visit(|next| visitor(found_template_parameter, next));
                 if *found_template_parameter {
-                    return CXChildVisit_Break;
+                    return EntityVisitResult::Break;
                 }
             }
 
             // Continue traversing the AST at the original cursor.
-            CXChildVisit_Recurse
+            EntityVisitResult::Recurse
         }
 
         if self.is_template_parameter() {
@@ -368,40 +344,33 @@ impl Cursor {
 
     /// Is this cursor pointing a valid referent?
     pub(crate) fn is_valid(&self) -> bool {
-        unsafe { clang_isInvalid(self.kind()) == 0 }
+        self.kind().map(|e| e.is_valid()).unwrap_or_default()
     }
 
     /// Get the source location for the referent.
     pub(crate) fn location(&self) -> SourceLocation {
-        unsafe {
-            SourceLocation {
-                x: clang_getCursorLocation(self.x),
-            }
+        SourceLocation {
+            location: self.entity.and_then(|e| e.get_location()),
         }
     }
 
     /// Get the source location range for the referent.
-    pub(crate) fn extent(&self) -> CXSourceRange {
-        unsafe { clang_getCursorExtent(self.x) }
+    pub(crate) fn extent(&self) -> SourceRange {
+        SourceRange {
+            range: self.entity.map(|e| e.get_range()),
+        }
     }
 
     /// Get the raw declaration comment for this referent, if one exists.
     pub(crate) fn raw_comment(&self) -> Option<String> {
-        let s = unsafe {
-            cxstring_into_string(clang_Cursor_getRawCommentText(self.x))
-        };
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
+        self.entity?.get_comment()
     }
 
     /// Get the referent's parsed comment.
     pub(crate) fn comment(&self) -> Comment {
         unsafe {
             Comment {
-                x: clang_Cursor_getParsedComment(self.x),
+                comment: self.entity.map(|e| e.get_parsed_comment()),
             }
         }
     }
@@ -410,7 +379,7 @@ impl Cursor {
     pub(crate) fn cur_type(&self) -> Type {
         unsafe {
             Type {
-                x: clang_getCursorType(self.x),
+                ty: self.entity.and_then(|e| e.get_type()),
             }
         }
     }
@@ -419,16 +388,14 @@ impl Cursor {
     /// a declaration, get the cursor pointing to the referenced type or type of
     /// the declared thing.
     pub(crate) fn definition(&self) -> Option<Cursor> {
-        unsafe {
-            let ret = Cursor {
-                x: clang_getCursorDefinition(self.x),
-            };
+        let ret = Cursor {
+            entity: self.entity.and_then(|e| e.get_definition()),
+        };
 
-            if ret.is_valid() && ret.kind() != CXCursor_NoDeclFound {
-                Some(ret)
-            } else {
-                None
-            }
+        if ret.is_valid() && ret.kind() != Some(EntityKind::InvalidDecl) {
+            Some(ret)
+        } else {
+            None
         }
     }
 
@@ -437,7 +404,7 @@ impl Cursor {
     pub(crate) fn referenced(&self) -> Option<Cursor> {
         unsafe {
             let ret = Cursor {
-                x: clang_getCursorReferenced(self.x),
+                entity: self.entity.and_then(|e| e.get_reference()),
             };
 
             if ret.is_valid() {
@@ -456,7 +423,7 @@ impl Cursor {
     pub(crate) fn canonical(&self) -> Cursor {
         unsafe {
             Cursor {
-                x: clang_getCanonicalCursor(self.x),
+                entity: self.entity.map(|e| e.get_canonical_entity()),
             }
         }
     }
@@ -467,7 +434,7 @@ impl Cursor {
     pub(crate) fn specialized(&self) -> Option<Cursor> {
         unsafe {
             let ret = Cursor {
-                x: clang_getSpecializedCursorTemplate(self.x),
+                entity: self.entity.and_then(|e| e.get_template()),
             };
             if ret.is_valid() {
                 Some(ret)
@@ -479,8 +446,8 @@ impl Cursor {
 
     /// Assuming that this cursor's referent is a template declaration, get the
     /// kind of cursor that would be generated for its specializations.
-    pub(crate) fn template_kind(&self) -> CXCursorKind {
-        unsafe { clang_getTemplateCursorKind(self.x) }
+    pub(crate) fn template_kind(&self) -> Option<EntityKind> {
+        self.entity.and_then(|e| e.get_template_kind())
     }
 
     /// Traverse this cursor's referent and its children.
@@ -488,20 +455,23 @@ impl Cursor {
     /// Call the given function on each AST node traversed.
     pub(crate) fn visit<Visitor>(&self, mut visitor: Visitor)
     where
-        Visitor: FnMut(Cursor) -> CXChildVisitResult,
+        Visitor: FnMut(Cursor<'tu>) -> EntityVisitResult,
     {
-        let data = &mut visitor as *mut Visitor;
-        unsafe {
-            clang_visitChildren(self.x, visit_children::<Visitor>, data.cast());
+        if let Some(ref e) = self.entity {
+            e.visit_children(|entity, _parent| {
+                visitor(Cursor {
+                    entity: Some(entity),
+                })
+            });
         }
     }
 
     /// Collect all of this cursor's children into a vec and return them.
-    pub(crate) fn collect_children(&self) -> Vec<Cursor> {
+    pub(crate) fn collect_children(&self) -> Vec<Cursor<'tu>> {
         let mut children = vec![];
         self.visit(|c| {
             children.push(c);
-            CXChildVisit_Continue
+            EntityVisitResult::Continue
         });
         children
     }
@@ -511,7 +481,7 @@ impl Cursor {
         let mut has_children = false;
         self.visit(|_| {
             has_children = true;
-            CXChildVisit_Break
+            EntityVisitResult::Break
         });
         has_children
     }
@@ -523,9 +493,9 @@ impl Cursor {
         self.visit(|_| {
             num_left -= 1;
             if num_left == 0 {
-                CXChildVisit_Break
+                EntityVisitResult::Break
             } else {
-                CXChildVisit_Continue
+                EntityVisitResult::Continue
             }
         });
         num_left == 0
@@ -540,9 +510,9 @@ impl Cursor {
         self.visit(|c| {
             if c.kind() == kind {
                 found = true;
-                CXChildVisit_Break
+                EntityVisitResult::Break
             } else {
-                CXChildVisit_Continue
+                EntityVisitResult::Continue
             }
         });
 
@@ -551,12 +521,12 @@ impl Cursor {
 
     /// Is the referent an inlined function?
     pub(crate) fn is_inlined_function(&self) -> bool {
-        unsafe { clang_Cursor_isFunctionInlined(self.x) != 0 }
+        unsafe { clang_Cursor_isFunctionInlined(self.entity) != 0 }
     }
 
     /// Is the referent a defaulted function?
     pub(crate) fn is_defaulted_function(&self) -> bool {
-        unsafe { clang_CXXMethod_isDefaulted(self.x) != 0 }
+        unsafe { clang_CXXMethod_isDefaulted(self.entity) != 0 }
     }
 
     /// Is the referent a deleted function?
@@ -577,7 +547,7 @@ impl Cursor {
 
     /// Is the referent a bit field declaration?
     pub(crate) fn is_bit_field(&self) -> bool {
-        unsafe { clang_Cursor_isBitField(self.x) != 0 }
+        unsafe { clang_Cursor_isBitField(self.entity) != 0 }
     }
 
     /// Get a cursor to the bit field's width expression, or `None` if it's not
@@ -591,14 +561,14 @@ impl Cursor {
         self.visit(|cur| {
             // The first child may or may not be a TypeRef, depending on whether
             // the field's type is builtin. Skip it.
-            if cur.kind() == CXCursor_TypeRef {
-                return CXChildVisit_Continue;
+            if cur.kind() == EntityKind::TypeRef {
+                return EntityVisitResult::Continue;
             }
 
             // The next expression or literal is the bit width.
             result = Some(cur);
 
-            CXChildVisit_Break
+            EntityVisitResult::Break
         });
 
         result
@@ -615,7 +585,7 @@ impl Cursor {
         }
 
         unsafe {
-            let w = clang_getFieldDeclBitWidth(self.x);
+            let w = clang_getFieldDeclBitWidth(self.entity);
             if w == -1 {
                 None
             } else {
@@ -629,7 +599,7 @@ impl Cursor {
     pub(crate) fn enum_type(&self) -> Option<Type> {
         unsafe {
             let t = Type {
-                x: clang_getEnumDeclIntegerType(self.x),
+                ty: clang_getEnumDeclIntegerType(self.entity),
             };
             if t.is_valid() {
                 Some(t)
@@ -644,8 +614,8 @@ impl Cursor {
     /// Returns None if the cursor's referent is not an enum variant.
     pub(crate) fn enum_val_boolean(&self) -> Option<bool> {
         unsafe {
-            if self.kind() == CXCursor_EnumConstantDecl {
-                Some(clang_getEnumConstantDeclValue(self.x) != 0)
+            if self.kind() == EntityKind::EnumConstantDecl {
+                Some(clang_getEnumConstantDeclValue(self.entity) != 0)
             } else {
                 None
             }
@@ -657,9 +627,9 @@ impl Cursor {
     /// Returns None if the cursor's referent is not an enum variant.
     pub(crate) fn enum_val_signed(&self) -> Option<i64> {
         unsafe {
-            if self.kind() == CXCursor_EnumConstantDecl {
+            if self.kind() == EntityKind::EnumConstantDecl {
                 #[allow(clippy::unnecessary_cast)]
-                Some(clang_getEnumConstantDeclValue(self.x) as i64)
+                Some(clang_getEnumConstantDeclValue(self.entity) as i64)
             } else {
                 None
             }
@@ -671,9 +641,9 @@ impl Cursor {
     /// Returns None if the cursor's referent is not an enum variant.
     pub(crate) fn enum_val_unsigned(&self) -> Option<u64> {
         unsafe {
-            if self.kind() == CXCursor_EnumConstantDecl {
+            if self.kind() == EntityKind::EnumConstantDecl {
                 #[allow(clippy::unnecessary_cast)]
-                Some(clang_getEnumConstantDeclUnsignedValue(self.x) as u64)
+                Some(clang_getEnumConstantDeclUnsignedValue(self.entity) as u64)
             } else {
                 None
             }
@@ -695,7 +665,7 @@ impl Cursor {
                 if !*found_attr {
                     // `attr.name` and` attr.token_kind` are checked against unexposed attributes only.
                     if attr.kind.map_or(false, |k| k == kind) ||
-                        (kind == CXCursor_UnexposedAttr &&
+                        (kind == EntityKind::UnexposedAttr &&
                             cur.tokens().iter().any(|t| {
                                 t.kind == attr.token_kind &&
                                     t.spelling() == attr.name
@@ -705,13 +675,13 @@ impl Cursor {
                         found_count += 1;
 
                         if found_count == N {
-                            return CXChildVisit_Break;
+                            return EntityVisitResult::Break;
                         }
                     }
                 }
             }
 
-            CXChildVisit_Continue
+            EntityVisitResult::Continue
         });
 
         found_attrs
@@ -721,7 +691,7 @@ impl Cursor {
     /// being aliased.
     pub(crate) fn typedef_type(&self) -> Option<Type> {
         let inner = Type {
-            x: unsafe { clang_getTypedefDeclUnderlyingType(self.x) },
+            ty: unsafe { clang_getTypedefDeclUnderlyingType(self.entity) },
         };
 
         if inner.is_valid() {
@@ -735,12 +705,12 @@ impl Cursor {
     ///
     /// This only applies to functions and variables.
     pub(crate) fn linkage(&self) -> CXLinkageKind {
-        unsafe { clang_getCursorLinkage(self.x) }
+        unsafe { clang_getCursorLinkage(self.entity) }
     }
 
     /// Get the visibility of this cursor's referent.
     pub(crate) fn visibility(&self) -> CXVisibilityKind {
-        unsafe { clang_getCursorVisibility(self.x) }
+        unsafe { clang_getCursorVisibility(self.entity) }
     }
 
     /// Given that this cursor's referent is a function, return cursors to its
@@ -750,12 +720,14 @@ impl Cursor {
     /// declaration.
     pub(crate) fn args(&self) -> Option<Vec<Cursor>> {
         // match self.kind() {
-        // CXCursor_FunctionDecl |
-        // CXCursor_CXXMethod => {
+        // EntityKind::FunctionDecl |
+        // EntityKind::CXXMethod => {
         self.num_args().ok().map(|num| {
             (0..num)
                 .map(|i| Cursor {
-                    x: unsafe { clang_Cursor_getArgument(self.x, i as c_uint) },
+                    entity: unsafe {
+                        clang_Cursor_getArgument(self.entity, i as c_uint)
+                    },
                 })
                 .collect()
         })
@@ -768,7 +740,7 @@ impl Cursor {
     /// declaration.
     pub(crate) fn num_args(&self) -> Result<u32, ()> {
         unsafe {
-            let w = clang_Cursor_getNumArguments(self.x);
+            let w = clang_Cursor_getNumArguments(self.entity);
             if w == -1 {
                 Err(())
             } else {
@@ -779,7 +751,7 @@ impl Cursor {
 
     /// Get the access specifier for this cursor's referent.
     pub(crate) fn access_specifier(&self) -> CX_CXXAccessSpecifier {
-        unsafe { clang_getCXXAccessSpecifier(self.x) }
+        unsafe { clang_getCXXAccessSpecifier(self.entity) }
     }
 
     /// Is the cursor's referrent publically accessible in C++?
@@ -794,12 +766,12 @@ impl Cursor {
     /// Is this cursor's referent a field declaration that is marked as
     /// `mutable`?
     pub(crate) fn is_mutable_field(&self) -> bool {
-        unsafe { clang_CXXField_isMutable(self.x) != 0 }
+        unsafe { clang_CXXField_isMutable(self.entity) != 0 }
     }
 
     /// Get the offset of the field represented by the Cursor.
     pub(crate) fn offset_of_field(&self) -> Result<usize, LayoutError> {
-        let offset = unsafe { clang_Cursor_getOffsetOfField(self.x) };
+        let offset = unsafe { clang_Cursor_getOffsetOfField(self.entity) };
 
         if offset < 0 {
             Err(LayoutError::from(offset as i32))
@@ -810,27 +782,27 @@ impl Cursor {
 
     /// Is this cursor's referent a member function that is declared `static`?
     pub(crate) fn method_is_static(&self) -> bool {
-        unsafe { clang_CXXMethod_isStatic(self.x) != 0 }
+        unsafe { clang_CXXMethod_isStatic(self.entity) != 0 }
     }
 
     /// Is this cursor's referent a member function that is declared `const`?
     pub(crate) fn method_is_const(&self) -> bool {
-        unsafe { clang_CXXMethod_isConst(self.x) != 0 }
+        unsafe { clang_CXXMethod_isConst(self.entity) != 0 }
     }
 
     /// Is this cursor's referent a member function that is virtual?
     pub(crate) fn method_is_virtual(&self) -> bool {
-        unsafe { clang_CXXMethod_isVirtual(self.x) != 0 }
+        unsafe { clang_CXXMethod_isVirtual(self.entity) != 0 }
     }
 
     /// Is this cursor's referent a member function that is pure virtual?
     pub(crate) fn method_is_pure_virtual(&self) -> bool {
-        unsafe { clang_CXXMethod_isPureVirtual(self.x) != 0 }
+        unsafe { clang_CXXMethod_isPureVirtual(self.entity) != 0 }
     }
 
     /// Is this cursor's referent a struct or class with virtual members?
     pub(crate) fn is_virtual_base(&self) -> bool {
-        unsafe { clang_isVirtualBase(self.x) != 0 }
+        unsafe { clang_isVirtualBase(self.entity) != 0 }
     }
 
     /// Try to evaluate this cursor.
@@ -841,7 +813,7 @@ impl Cursor {
     /// Return the result type for this cursor
     pub(crate) fn ret_type(&self) -> Option<Type> {
         let rt = Type {
-            x: unsafe { clang_getCursorResultType(self.x) },
+            ty: unsafe { clang_getCursorResultType(self.entity) },
         };
         if rt.is_valid() {
             Some(rt)
@@ -867,7 +839,7 @@ impl Cursor {
     ///
     /// Returns None if the cursor does not include a file, otherwise the file's full name
     pub(crate) fn get_included_file_name(&self) -> Option<String> {
-        let file = unsafe { clang_sys::clang_getIncludedFile(self.x) };
+        let file = unsafe { clang_sys::clang_getIncludedFile(self.entity) };
         if file.is_null() {
             None
         } else {
@@ -891,7 +863,7 @@ impl<'a> RawTokens<'a> {
         let mut tokens = ptr::null_mut();
         let mut token_count = 0;
         let range = cursor.extent();
-        let tu = unsafe { clang_Cursor_getTranslationUnit(cursor.x) };
+        let tu = unsafe { clang_Cursor_getTranslationUnit(cursor.entity) };
         unsafe { clang_tokenize(tu, range, &mut tokens, &mut token_count) };
         Self {
             cursor,
@@ -1025,19 +997,19 @@ extern "C" fn visit_children<Visitor>(
     cur: CXCursor,
     _parent: CXCursor,
     data: CXClientData,
-) -> CXChildVisitResult
+) -> EntityVisitResult
 where
-    Visitor: FnMut(Cursor) -> CXChildVisitResult,
+    Visitor: FnMut(Cursor) -> EntityVisitResult,
 {
     let func: &mut Visitor = unsafe { &mut *(data as *mut Visitor) };
-    let child = Cursor { x: cur };
+    let child = Cursor { entity: cur };
 
     (*func)(child)
 }
 
 impl PartialEq for Cursor {
     fn eq(&self, other: &Cursor) -> bool {
-        unsafe { clang_equalCursors(self.x, other.x) == 1 }
+        unsafe { clang_equalCursors(self.entity, other.entity) == 1 }
     }
 }
 
@@ -1045,19 +1017,19 @@ impl Eq for Cursor {}
 
 impl Hash for Cursor {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        unsafe { clang_hashCursor(self.x) }.hash(state)
+        unsafe { clang_hashCursor(self.entity) }.hash(state)
     }
 }
 
 /// The type of a node in clang's AST.
 #[derive(Clone, Copy)]
-pub(crate) struct Type {
-    x: CXType,
+pub(crate) struct Type<'tu> {
+    ty: Option<clang::Type<'tu>>,
 }
 
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { clang_equalTypes(self.x, other.x) != 0 }
+        unsafe { clang_equalTypes(self.ty, other.ty) != 0 }
     }
 }
 
@@ -1113,14 +1085,14 @@ impl ::std::convert::From<i32> for LayoutError {
 impl Type {
     /// Get this type's kind.
     pub(crate) fn kind(&self) -> CXTypeKind {
-        self.x.kind
+        self.ty.kind
     }
 
     /// Get a cursor pointing to this type's declaration.
     pub(crate) fn declaration(&self) -> Cursor {
         unsafe {
             Cursor {
-                x: clang_getTypeDeclaration(self.x),
+                entity: clang_getTypeDeclaration(self.ty),
             }
         }
     }
@@ -1144,7 +1116,7 @@ impl Type {
         }
 
         let canonical = declaration.canonical();
-        if canonical.is_valid() && canonical.kind() != CXCursor_NoDeclFound {
+        if canonical.is_valid() && canonical.kind() != EntityKind::NoDeclFound {
             Some(CanonicalTypeDeclaration(*self, canonical))
         } else {
             None
@@ -1153,7 +1125,7 @@ impl Type {
 
     /// Get a raw display name for this type.
     pub(crate) fn spelling(&self) -> String {
-        let s = unsafe { cxstring_into_string(clang_getTypeSpelling(self.x)) };
+        let s = unsafe { cxstring_into_string(clang_getTypeSpelling(self.ty)) };
         // Clang 5.0 introduced changes in the spelling API so it returned the
         // full qualified name. Let's undo that here.
         if s.split("::").all(is_valid_identifier) {
@@ -1167,12 +1139,12 @@ impl Type {
 
     /// Is this type const qualified?
     pub(crate) fn is_const(&self) -> bool {
-        unsafe { clang_isConstQualifiedType(self.x) != 0 }
+        unsafe { clang_isConstQualifiedType(self.ty) != 0 }
     }
 
     #[inline]
     fn is_non_deductible_auto_type(&self) -> bool {
-        debug_assert_eq!(self.kind(), CXType_Auto);
+        debug_assert_eq!(self.kind(), clang::TypeKind::Auto);
         self.canonical_type() == *self
     }
 
@@ -1180,12 +1152,13 @@ impl Type {
     fn clang_size_of(&self, ctx: &BindgenContext) -> c_longlong {
         match self.kind() {
             // Work-around https://bugs.llvm.org/show_bug.cgi?id=40975
-            CXType_RValueReference | CXType_LValueReference => {
+            clang::TypeKind::RValueReference |
+            clang::TypeKind::LValueReference => {
                 ctx.target_pointer_size() as c_longlong
             }
             // Work-around https://bugs.llvm.org/show_bug.cgi?id=40813
-            CXType_Auto if self.is_non_deductible_auto_type() => -6,
-            _ => unsafe { clang_Type_getSizeOf(self.x) },
+            clang::TypeKind::Auto if self.is_non_deductible_auto_type() => -6,
+            _ => unsafe { clang_Type_getSizeOf(self.ty) },
         }
     }
 
@@ -1193,12 +1166,13 @@ impl Type {
     fn clang_align_of(&self, ctx: &BindgenContext) -> c_longlong {
         match self.kind() {
             // Work-around https://bugs.llvm.org/show_bug.cgi?id=40975
-            CXType_RValueReference | CXType_LValueReference => {
+            clang::TypeKind::RValueReference |
+            clang::TypeKind::LValueReference => {
                 ctx.target_pointer_size() as c_longlong
             }
             // Work-around https://bugs.llvm.org/show_bug.cgi?id=40813
-            CXType_Auto if self.is_non_deductible_auto_type() => -6,
-            _ => unsafe { clang_Type_getAlignOf(self.x) },
+            clang::TypeKind::Auto if self.is_non_deductible_auto_type() => -6,
+            _ => unsafe { clang_Type_getAlignOf(self.ty) },
         }
     }
 
@@ -1265,7 +1239,7 @@ impl Type {
     /// Get the number of template arguments this type has, or `None` if it is
     /// not some kind of template.
     pub(crate) fn num_template_args(&self) -> Option<u32> {
-        let n = unsafe { clang_Type_getNumTemplateArguments(self.x) };
+        let n = unsafe { clang_Type_getNumTemplateArguments(self.ty) };
         if n >= 0 {
             Some(n as u32)
         } else {
@@ -1278,7 +1252,7 @@ impl Type {
     /// template arguments. Otherwise, return None.
     pub(crate) fn template_args(&self) -> Option<TypeTemplateArgIterator> {
         self.num_template_args().map(|n| TypeTemplateArgIterator {
-            x: self.x,
+            x: self.ty,
             length: n,
             index: 0,
         })
@@ -1291,7 +1265,7 @@ impl Type {
         self.num_args().ok().map(|num| {
             (0..num)
                 .map(|i| Type {
-                    x: unsafe { clang_getArgType(self.x, i as c_uint) },
+                    ty: unsafe { clang_getArgType(self.ty, i as c_uint) },
                 })
                 .collect()
         })
@@ -1302,7 +1276,7 @@ impl Type {
     /// Returns Err if the type is not a function prototype.
     pub(crate) fn num_args(&self) -> Result<u32, ()> {
         unsafe {
-            let w = clang_getNumArgTypes(self.x);
+            let w = clang_getNumArgTypes(self.ty);
             if w == -1 {
                 Err(())
             } else {
@@ -1315,14 +1289,14 @@ impl Type {
     /// to.
     pub(crate) fn pointee_type(&self) -> Option<Type> {
         match self.kind() {
-            CXType_Pointer |
-            CXType_RValueReference |
-            CXType_LValueReference |
-            CXType_MemberPointer |
-            CXType_BlockPointer |
-            CXType_ObjCObjectPointer => {
+            clang::TypeKind::Pointer |
+            clang::TypeKind::RValueReference |
+            clang::TypeKind::LValueReference |
+            clang::TypeKind::MemberPointer |
+            clang::TypeKind::BlockPointer |
+            clang::TypeKind::ObjCObjectPointer => {
                 let ret = Type {
-                    x: unsafe { clang_getPointeeType(self.x) },
+                    ty: unsafe { clang_getPointeeType(self.ty) },
                 };
                 debug_assert!(ret.is_valid());
                 Some(ret)
@@ -1335,7 +1309,7 @@ impl Type {
     /// type of its elements.
     pub(crate) fn elem_type(&self) -> Option<Type> {
         let current_type = Type {
-            x: unsafe { clang_getElementType(self.x) },
+            ty: unsafe { clang_getElementType(self.ty) },
         };
         if current_type.is_valid() {
             Some(current_type)
@@ -1347,7 +1321,7 @@ impl Type {
     /// Given that this type is an array or vector type, return its number of
     /// elements.
     pub(crate) fn num_elements(&self) -> Option<usize> {
-        let num_elements_returned = unsafe { clang_getNumElements(self.x) };
+        let num_elements_returned = unsafe { clang_getNumElements(self.ty) };
         if num_elements_returned != -1 {
             Some(num_elements_returned as usize)
         } else {
@@ -1360,21 +1334,21 @@ impl Type {
     pub(crate) fn canonical_type(&self) -> Type {
         unsafe {
             Type {
-                x: clang_getCanonicalType(self.x),
+                ty: clang_getCanonicalType(self.ty),
             }
         }
     }
 
     /// Is this type a variadic function type?
     pub(crate) fn is_variadic(&self) -> bool {
-        unsafe { clang_isFunctionTypeVariadic(self.x) != 0 }
+        unsafe { clang_isFunctionTypeVariadic(self.ty) != 0 }
     }
 
     /// Given that this type is a function type, get the type of its return
     /// value.
     pub(crate) fn ret_type(&self) -> Option<Type> {
         let rt = Type {
-            x: unsafe { clang_getResultType(self.x) },
+            ty: unsafe { clang_getResultType(self.ty) },
         };
         if rt.is_valid() {
             Some(rt)
@@ -1386,7 +1360,7 @@ impl Type {
     /// Given that this type is a function type, get its calling convention. If
     /// this is not a function type, `CXCallingConv_Invalid` is returned.
     pub(crate) fn call_conv(&self) -> CXCallingConv {
-        unsafe { clang_getFunctionTypeCallingConv(self.x) }
+        unsafe { clang_getFunctionTypeCallingConv(self.ty) }
     }
 
     /// For elaborated types (types which use `class`, `struct`, or `union` to
@@ -1394,19 +1368,19 @@ impl Type {
     pub(crate) fn named(&self) -> Type {
         unsafe {
             Type {
-                x: clang_Type_getNamedType(self.x),
+                ty: clang_Type_getNamedType(self.ty),
             }
         }
     }
 
     /// Is this a valid type?
     pub(crate) fn is_valid(&self) -> bool {
-        self.kind() != CXType_Invalid
+        self.kind() != clang::TypeKind::Invalid
     }
 
     /// Is this a valid and exposed type?
     pub(crate) fn is_valid_and_exposed(&self) -> bool {
-        self.is_valid() && self.kind() != CXType_Unexposed
+        self.is_valid() && self.kind() != clang::TypeKind::Unexposed
     }
 
     /// Is this type a fully instantiated template?
@@ -1417,9 +1391,9 @@ impl Type {
         self.template_args().map_or(false, |args| args.len() > 0) &&
             !matches!(
                 self.declaration().kind(),
-                CXCursor_ClassTemplatePartialSpecialization |
-                    CXCursor_TypeAliasTemplateDecl |
-                    CXCursor_TemplateTemplateParameter
+                EntityKind::ClassTemplatePartialSpecialization |
+                    EntityKind::TypeAliasTemplateDecl |
+                    EntityKind::TemplateTemplateParameter
             )
     }
 
@@ -1444,7 +1418,7 @@ impl Type {
             ASSOC_TYPE_RE.is_match(spelling.as_ref())
         }
 
-        self.kind() == CXType_Unexposed &&
+        self.kind() == clang::TypeKind::Unexposed &&
             (hacky_parse_associated_type(self.spelling()) ||
                 hacky_parse_associated_type(
                     self.canonical_type().spelling(),
@@ -1486,7 +1460,9 @@ impl Iterator for TypeTemplateArgIterator {
             let idx = self.index as c_uint;
             self.index += 1;
             Some(Type {
-                x: unsafe { clang_Type_getTemplateArgumentAsType(self.x, idx) },
+                ty: unsafe {
+                    clang_Type_getTemplateArgumentAsType(self.x, idx)
+                },
             })
         } else {
             None
@@ -1504,7 +1480,7 @@ impl ExactSizeIterator for TypeTemplateArgIterator {
 /// A `SourceLocation` is a file, line, column, and byte offset location for
 /// some source text.
 pub(crate) struct SourceLocation {
-    x: CXSourceLocation,
+    location: CXSourceLocation,
 }
 
 impl SourceLocation {
@@ -1517,7 +1493,11 @@ impl SourceLocation {
             let mut col = 0;
             let mut off = 0;
             clang_getSpellingLocation(
-                self.x, &mut file, &mut line, &mut col, &mut off,
+                self.location,
+                &mut file,
+                &mut line,
+                &mut col,
+                &mut off,
             );
             (File { x: file }, line as usize, col as usize, off as usize)
         }
@@ -1544,21 +1524,21 @@ impl fmt::Debug for SourceLocation {
 /// A comment in the source text.
 ///
 /// Comments are sort of parsed by Clang, and have a tree structure.
-pub(crate) struct Comment {
-    x: CXComment,
+pub(crate) struct Comment<'tu> {
+    comment: Option<clang::Comment<'tu>>,
 }
 
 impl Comment {
     /// What kind of comment is this?
     pub(crate) fn kind(&self) -> CXCommentKind {
-        unsafe { clang_Comment_getKind(self.x) }
+        unsafe { clang_Comment_getKind(self.comment) }
     }
 
     /// Get this comment's children comment
     pub(crate) fn get_children(&self) -> CommentChildrenIterator {
         CommentChildrenIterator {
-            parent: self.x,
-            length: unsafe { clang_Comment_getNumChildren(self.x) },
+            parent: self.comment,
+            length: unsafe { clang_Comment_getNumChildren(self.comment) },
             index: 0,
         }
     }
@@ -1566,14 +1546,16 @@ impl Comment {
     /// Given that this comment is the start or end of an HTML tag, get its tag
     /// name.
     pub(crate) fn get_tag_name(&self) -> String {
-        unsafe { cxstring_into_string(clang_HTMLTagComment_getTagName(self.x)) }
+        unsafe {
+            cxstring_into_string(clang_HTMLTagComment_getTagName(self.comment))
+        }
     }
 
     /// Given that this comment is an HTML start tag, get its attributes.
     pub(crate) fn get_tag_attrs(&self) -> CommentAttributesIterator {
         CommentAttributesIterator {
-            x: self.x,
-            length: unsafe { clang_HTMLStartTag_getNumAttrs(self.x) },
+            x: self.comment,
+            length: unsafe { clang_HTMLStartTag_getNumAttrs(self.comment) },
             index: 0,
         }
     }
@@ -1593,7 +1575,7 @@ impl Iterator for CommentChildrenIterator {
             let idx = self.index;
             self.index += 1;
             Some(Comment {
-                x: unsafe { clang_Comment_getChild(self.parent, idx) },
+                comment: unsafe { clang_Comment_getChild(self.parent, idx) },
             })
         } else {
             None
@@ -1771,7 +1753,7 @@ impl TranslationUnit {
     pub(crate) fn cursor(&self) -> Cursor {
         unsafe {
             Cursor {
-                x: clang_getTranslationUnitCursor(self.x),
+                entity: clang_getTranslationUnitCursor(self.x),
             }
         }
     }
@@ -1864,7 +1846,7 @@ pub(crate) fn type_to_str(x: CXTypeKind) -> String {
 }
 
 /// Dump the Clang AST to stdout for debugging purposes.
-pub(crate) fn ast_dump(c: &Cursor, depth: isize) -> CXChildVisitResult {
+pub(crate) fn ast_dump(c: &Cursor, depth: isize) -> EntityVisitResult {
     fn print_indent<S: AsRef<str>>(depth: isize, s: S) {
         for _ in 0..depth {
             print!("    ");
@@ -1901,7 +1883,7 @@ pub(crate) fn ast_dump(c: &Cursor, depth: isize) -> CXChildVisitResult {
         );
 
         let templ_kind = c.template_kind();
-        if templ_kind != CXCursor_NoDeclFound {
+        if templ_kind != EntityKind::NoDeclFound {
             print_indent(
                 depth,
                 format!(
@@ -2001,7 +1983,7 @@ pub(crate) fn ast_dump(c: &Cursor, depth: isize) -> CXChildVisitResult {
 
         let kind = ty.kind();
         print_indent(depth, format!(" {}kind = {}", prefix, type_to_str(kind)));
-        if kind == CXType_Invalid {
+        if kind == clang::TypeKind::Invalid {
             return;
         }
 
@@ -2012,7 +1994,7 @@ pub(crate) fn ast_dump(c: &Cursor, depth: isize) -> CXChildVisitResult {
             format!(" {}spelling = \"{}\"", prefix, ty.spelling()),
         );
         let num_template_args =
-            unsafe { clang_Type_getNumTemplateArguments(ty.x) };
+            unsafe { clang_Type_getNumTemplateArguments(ty.ty) };
         if num_template_args >= 0 {
             print_indent(
                 depth,
@@ -2075,7 +2057,7 @@ pub(crate) fn ast_dump(c: &Cursor, depth: isize) -> CXChildVisitResult {
     print_type(depth, "type.", &ty);
 
     let declaration = ty.declaration();
-    if declaration != *c && declaration.kind() != CXCursor_NoDeclFound {
+    if declaration != *c && declaration.kind() != EntityKind::NoDeclFound {
         println!();
         print_cursor(depth, "type.declaration.", &declaration);
     }
@@ -2092,7 +2074,7 @@ pub(crate) fn ast_dump(c: &Cursor, depth: isize) -> CXChildVisitResult {
 
     print_indent(depth, ")");
 
-    CXChildVisit_Continue
+    EntityVisitResult::Continue
 }
 
 /// Try to extract the clang version to a string
@@ -2116,14 +2098,15 @@ impl EvalResult {
         {
             let mut found_cant_eval = false;
             cursor.visit(|c| {
-                if c.kind() == CXCursor_TypeRef &&
-                    c.cur_type().canonical_type().kind() == CXType_Unexposed
+                if c.kind() == Some(EntityKind::TypeRef) &&
+                    c.cur_type().canonical_type().kind() ==
+                        clang::TypeKind::Unexposed
                 {
                     found_cant_eval = true;
-                    return CXChildVisit_Break;
+                    return EntityVisitResult::Break;
                 }
 
-                CXChildVisit_Recurse
+                EntityVisitResult::Recurse
             });
 
             if found_cant_eval {
@@ -2131,7 +2114,7 @@ impl EvalResult {
             }
         }
         Some(EvalResult {
-            x: unsafe { clang_Cursor_Evaluate(cursor.x) },
+            x: unsafe { clang_Cursor_Evaluate(cursor.entity) },
             ty: cursor.cur_type().canonical_type(),
         })
     }
@@ -2185,16 +2168,19 @@ impl EvalResult {
 
         let char_ty = self.ty.pointee_type().or_else(|| self.ty.elem_type())?;
         match char_ty.kind() {
-            CXType_Char_S | CXType_SChar | CXType_Char_U | CXType_UChar => {
+            clang::TypeKind::Char_S |
+            clang::TypeKind::SChar |
+            clang::TypeKind::Char_U |
+            clang::TypeKind::UChar => {
                 let ret = unsafe {
                     CStr::from_ptr(clang_EvalResult_getAsStr(self.x))
                 };
                 Some(ret.to_bytes().to_vec())
             }
             // FIXME: Support generating these.
-            CXType_Char16 => None,
-            CXType_Char32 => None,
-            CXType_WChar => None,
+            clang::TypeKind::Char16 => None,
+            clang::TypeKind::Char32 => None,
+            clang::TypeKind::WChar => None,
             _ => None,
         }
     }

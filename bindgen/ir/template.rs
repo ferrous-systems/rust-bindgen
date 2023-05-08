@@ -30,7 +30,7 @@
 use super::context::{BindgenContext, ItemId, TypeId};
 use super::item::{IsOpaque, Item, ItemAncestors};
 use super::traversal::{EdgeKind, Trace, Tracer};
-use crate::clang;
+use crate::clang_ext;
 
 /// Template declaration (and such declaration's template parameters) related
 /// methods.
@@ -218,7 +218,7 @@ impl TemplateInstantiation {
 
     /// Parse a `TemplateInstantiation` from a clang `Type`.
     pub(crate) fn from_ty(
-        ty: &clang::Type,
+        ty: &clang_ext::Type,
         ctx: &mut BindgenContext,
     ) -> Option<TemplateInstantiation> {
         use clang_sys::*;

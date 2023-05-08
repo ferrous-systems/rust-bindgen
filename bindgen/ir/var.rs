@@ -8,8 +8,8 @@ use super::int::IntKind;
 use super::item::Item;
 use super::ty::{FloatKind, TypeKind};
 use crate::callbacks::{ItemInfo, ItemKind, MacroParsingBehavior};
-use crate::clang;
-use crate::clang::ClangToken;
+use crate::clang_ext;
+use crate::clang_ext::ClangToken;
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 
 use std::io;
@@ -159,7 +159,7 @@ fn default_macro_constant_type(ctx: &BindgenContext, value: i64) -> IntKind {
 /// Parses tokens from a CXCursor_MacroDefinition pointing into a function-like
 /// macro, and calls the func_macro callback.
 fn handle_function_macro(
-    cursor: &clang::Cursor,
+    cursor: &clang_ext::Cursor,
     callbacks: &dyn crate::callbacks::ParseCallbacks,
 ) {
     let is_closing_paren = |t: &ClangToken| {
@@ -181,7 +181,7 @@ fn handle_function_macro(
 
 impl ClangSubItemParser for Var {
     fn parse(
-        cursor: clang::Cursor,
+        cursor: clang_ext::Cursor,
         ctx: &mut BindgenContext,
     ) -> Result<ParseResult<Self>, ParseError> {
         use cexpr::expr::EvalResult;
@@ -392,7 +392,7 @@ impl ClangSubItemParser for Var {
 /// Try and parse a macro using all the macros parsed until now.
 fn parse_macro(
     ctx: &BindgenContext,
-    cursor: &clang::Cursor,
+    cursor: &clang_ext::Cursor,
 ) -> Option<(Vec<u8>, cexpr::expr::EvalResult)> {
     use cexpr::expr;
 
@@ -406,7 +406,7 @@ fn parse_macro(
     }
 }
 
-fn parse_int_literal_tokens(cursor: &clang::Cursor) -> Option<i64> {
+fn parse_int_literal_tokens(cursor: &clang_ext::Cursor) -> Option<i64> {
     use cexpr::expr;
     use cexpr::expr::EvalResult;
 
@@ -419,7 +419,7 @@ fn parse_int_literal_tokens(cursor: &clang::Cursor) -> Option<i64> {
     }
 }
 
-fn get_integer_literal_from_cursor(cursor: &clang::Cursor) -> Option<i64> {
+fn get_integer_literal_from_cursor(cursor: &clang_ext::Cursor) -> Option<i64> {
     use clang_sys::*;
     let mut value = None;
     cursor.visit(|c| {
@@ -443,7 +443,7 @@ fn get_integer_literal_from_cursor(cursor: &clang::Cursor) -> Option<i64> {
 
 fn duplicated_macro_diagnostic(
     macro_name: &str,
-    _location: crate::clang::SourceLocation,
+    _location: crate::clang_ext::SourceLocation,
     _ctx: &BindgenContext,
 ) {
     warn!("Duplicated macro definition: {}", macro_name);

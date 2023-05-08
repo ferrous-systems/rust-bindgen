@@ -9,7 +9,7 @@ use super::layout::Layout;
 use super::template::TemplateParameters;
 use super::traversal::{EdgeKind, Trace, Tracer};
 use super::ty::RUST_DERIVE_IN_ARRAY_LIMIT;
-use crate::clang;
+use crate::clang_ext;
 use crate::codegen::struct_layout::{align_to, bytes_from_bits_pow2};
 use crate::ir::derive::CanDeriveCopy;
 use crate::parse::ParseError;
@@ -1231,8 +1231,8 @@ impl CompInfo {
     /// Construct a new compound type from a Clang type.
     pub(crate) fn from_ty(
         potential_id: ItemId,
-        ty: &clang::Type,
-        location: Option<clang::Cursor>,
+        ty: &clang_ext::Type,
+        location: Option<clang_ext::Cursor>,
         ctx: &mut BindgenContext,
     ) -> Result<Self, ParseError> {
         use clang_sys::*;
@@ -1556,7 +1556,7 @@ impl CompInfo {
                     warn!(
                         "unhandled comp member `{}` (kind {:?}) in `{}` ({})",
                         cur.spelling(),
-                        clang::kind_to_str(cur.kind()),
+                        clang_ext::kind_to_str(cur.kind()),
                         cursor.spelling(),
                         cur.location()
                     );
@@ -1575,7 +1575,7 @@ impl CompInfo {
     }
 
     fn kind_from_cursor(
-        cursor: &clang::Cursor,
+        cursor: &clang_ext::Cursor,
     ) -> Result<CompKind, ParseError> {
         use clang_sys::*;
         Ok(match cursor.kind() {

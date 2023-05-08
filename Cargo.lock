@@ -28,7 +28,7 @@ dependencies = [
  "annotate-snippets",
  "bitflags 2.2.1",
  "cexpr",
- "clang-sys",
+ "clang",
  "lazy_static",
  "lazycell",
  "log",
@@ -113,6 +113,16 @@ name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
+
+[[package]]
+name = "clang"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34c6913be3a1c94f52fb975cdec7ef5a7b69de10a55de66dcbc30d7046b85fa1"
+dependencies = [
+ "clang-sys",
+ "libc",
+]
 
 [[package]]
 name = "clang-sys"

@@ -17,7 +17,7 @@ use super::module::Module;
 use super::template::{AsTemplateParam, TemplateParameters};
 use super::traversal::{EdgeKind, Trace, Tracer};
 use super::ty::{Type, TypeKind};
-use crate::clang;
+use crate::clang_ext;
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 
 use lazycell::LazyCell;
@@ -415,7 +415,7 @@ pub(crate) struct Item {
     /// The item kind.
     kind: ItemKind,
     /// The source location of the item.
-    location: Option<clang::SourceLocation>,
+    location: Option<clang_ext::SourceLocation>,
 }
 
 impl AsRef<ItemId> for Item {
@@ -432,7 +432,7 @@ impl Item {
         annotations: Option<Annotations>,
         parent_id: ItemId,
         kind: ItemKind,
-        location: Option<clang::SourceLocation>,
+        location: Option<clang_ext::SourceLocation>,
     ) -> Self {
         debug_assert!(id != parent_id || kind.is_module());
         Item {
@@ -452,7 +452,7 @@ impl Item {
     /// Construct a new opaque item type.
     pub(crate) fn new_opaque_type(
         with_id: ItemId,
-        ty: &clang::Type,
+        ty: &clang_ext::Type,
         ctx: &mut BindgenContext,
     ) -> TypeId {
         let location = ty.declaration().location();
@@ -531,7 +531,7 @@ impl Item {
     }
 
     /// Where in the source is this item located?
-    pub(crate) fn location(&self) -> Option<&clang::SourceLocation> {
+    pub(crate) fn location(&self) -> Option<&clang_ext::SourceLocation> {
         self.location.as_ref()
     }
 
@@ -1283,9 +1283,9 @@ impl TemplateParameters for ItemKind {
 
 // An utility function to handle recursing inside nested types.
 fn visit_child(
-    cur: clang::Cursor,
+    cur: clang_ext::Cursor,
     id: ItemId,
-    ty: &clang::Type,
+    ty: &clang_ext::Type,
     parent_id: Option<ItemId>,
     ctx: &mut BindgenContext,
     result: &mut Result<TypeId, ParseError>,
@@ -1336,7 +1336,7 @@ impl Item {
 
     /// Parse this item from the given Clang cursor.
     pub(crate) fn parse(
-        cursor: clang::Cursor,
+        cursor: clang_ext::Cursor,
         parent_id: Option<ItemId>,
         ctx: &mut BindgenContext,
     ) -> Result<ItemId, ParseError> {
@@ -1485,8 +1485,8 @@ impl Item {
     /// Parse this item from the given Clang type, or if we haven't resolved all
     /// the other items this one depends on, an unresolved reference.
     pub(crate) fn from_ty_or_ref(
-        ty: clang::Type,
-        location: clang::Cursor,
+        ty: clang_ext::Type,
+        location: clang_ext::Cursor,
         parent_id: Option<ItemId>,
         ctx: &mut BindgenContext,
     ) -> TypeId {
@@ -1506,8 +1506,8 @@ impl Item {
     /// `BindgenContext::resolve_typerefs`.
     pub(crate) fn from_ty_or_ref_with_id(
         potential_id: ItemId,
-        ty: clang::Type,
-        location: clang::Cursor,
+        ty: clang_ext::Type,
+        location: clang_ext::Cursor,
         parent_id: Option<ItemId>,
         ctx: &mut BindgenContext,
     ) -> TypeId {
@@ -1561,8 +1561,8 @@ impl Item {
 
     /// Parse this item from the given Clang type. See [`Item::from_ty_with_id`].
     pub(crate) fn from_ty(
-        ty: &clang::Type,
-        location: clang::Cursor,
+        ty: &clang_ext::Type,
+        location: clang_ext::Cursor,
         parent_id: Option<ItemId>,
         ctx: &mut BindgenContext,
     ) -> Result<TypeId, ParseError> {
@@ -1580,8 +1580,8 @@ impl Item {
     /// context.
     pub(crate) fn from_ty_with_id(
         id: ItemId,
-        ty: &clang::Type,
-        location: clang::Cursor,
+        ty: &clang_ext::Type,
+        location: clang_ext::Cursor,
         parent_id: Option<ItemId>,
         ctx: &mut BindgenContext,
     ) -> Result<TypeId, ParseError> {
@@ -1753,7 +1753,7 @@ impl Item {
     /// it's the only exception when there's no declaration for a type.
     pub(crate) fn type_param(
         with_id: Option<ItemId>,
-        location: clang::Cursor,
+        location: clang_ext::Cursor,
         ctx: &mut BindgenContext,
     ) -> Option<TypeId> {
         let ty = location.cur_type();
@@ -1825,7 +1825,7 @@ impl Item {
         // the whole libclang -> IR parsing code.
 
         fn is_template_with_spelling(
-            refd: &clang::Cursor,
+            refd: &clang_ext::Cursor,
             spelling: &str,
         ) -> bool {
             lazy_static! {

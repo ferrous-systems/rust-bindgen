@@ -41,7 +41,7 @@ mod time;
 
 pub mod callbacks;
 
-mod clang;
+mod clang_ext;
 #[cfg(feature = "experimental")]
 mod diagnostics;
 mod features;
@@ -329,7 +329,7 @@ impl Builder {
         let input_unsaved_files =
             std::mem::take(&mut self.options.input_header_contents)
                 .into_iter()
-                .map(|(name, contents)| clang::UnsavedFile::new(name, contents))
+                .map(|(name, contents)| clang_ext::UnsavedFile::new(name, contents))
                 .collect::<Vec<_>>();
 
         Bindings::generate(self.options, input_unsaved_files)
@@ -717,7 +717,7 @@ impl Bindings {
     /// Generate bindings for the given options.
     pub(crate) fn generate(
         mut options: BindgenOptions,
-        input_unsaved_files: Vec<clang::UnsavedFile>,
+        input_unsaved_files: Vec<clang_ext::UnsavedFile>,
     ) -> Result<Bindings, BindgenError> {
         ensure_libclang_is_loaded();
 
@@ -1062,14 +1062,14 @@ impl std::fmt::Display for Bindings {
 
 /// Determines whether the given cursor is in any of the files matched by the
 /// options.
-fn filter_builtins(ctx: &BindgenContext, cursor: &clang::Cursor) -> bool {
+fn filter_builtins(ctx: &BindgenContext, cursor: &clang_ext::Cursor) -> bool {
     ctx.options().builtins || !cursor.is_builtin()
 }
 
 /// Parse one `Item` from the Clang cursor.
 fn parse_one(
     ctx: &mut BindgenContext,
-    cursor: clang::Cursor,
+    cursor: clang_ext::Cursor,
     parent: Option<ItemId>,
 ) -> clang_sys::CXChildVisitResult {
     if !filter_builtins(ctx, &cursor) {
@@ -1111,9 +1111,9 @@ fn parse(context: &mut BindgenContext) -> Result<(), BindgenError> {
     let cursor = context.translation_unit().cursor();
 
     if context.options().emit_ast {
-        fn dump_if_not_builtin(cur: &clang::Cursor) -> CXChildVisitResult {
+        fn dump_if_not_builtin(cur: &clang_ext::Cursor) -> CXChildVisitResult {
             if !cur.is_builtin() {
-                clang::ast_dump(cur, 0)
+                clang_ext::ast_dump(cur, 0)
             } else {
                 CXChildVisit_Continue
             }
@@ -1147,7 +1147,7 @@ pub fn clang_version() -> ClangVersion {
     ensure_libclang_is_loaded();
 
     //Debian clang version 11.0.1-2
-    let raw_v: String = clang::extract_clang_version();
+    let raw_v: String = clang_ext::extract_clang_version();
     let split_v: Option<Vec<&str>> = raw_v
         .split_whitespace()
         .find(|t| t.chars().next().map_or(false, |v| v.is_ascii_digit()))

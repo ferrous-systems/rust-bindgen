@@ -7,7 +7,7 @@ use super::item::Item;
 use super::traversal::{EdgeKind, Trace, Tracer};
 use super::ty::TypeKind;
 use crate::callbacks::{ItemInfo, ItemKind};
-use crate::clang::{self, Attribute};
+use crate::clang_ext::{self, Attribute};
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 use clang_sys::{self, CXCallingConv};
 
@@ -29,7 +29,7 @@ pub(crate) enum FunctionKind {
 impl FunctionKind {
     /// Given a clang cursor, return the kind of function it represents, or
     /// `None` otherwise.
-    pub(crate) fn from_cursor(cursor: &clang::Cursor) -> Option<FunctionKind> {
+    pub(crate) fn from_cursor(cursor: &clang_ext::Cursor) -> Option<FunctionKind> {
         // FIXME(emilio): Deduplicate logic with `ir::comp`.
         Some(match cursor.kind() {
             clang_sys::CXCursor_FunctionDecl => FunctionKind::Function,
@@ -306,7 +306,7 @@ fn get_abi(cc: CXCallingConv) -> ClangAbi {
 /// Get the mangled name for the cursor's referent.
 pub(crate) fn cursor_mangling(
     ctx: &BindgenContext,
-    cursor: &clang::Cursor,
+    cursor: &clang_ext::Cursor,
 ) -> Option<String> {
     if !ctx.options().enable_mangling {
         return None;
@@ -367,8 +367,8 @@ pub(crate) fn cursor_mangling(
 }
 
 fn args_from_ty_and_cursor(
-    ty: &clang::Type,
-    cursor: &clang::Cursor,
+    ty: &clang_ext::Type,
+    cursor: &clang_ext::Cursor,
     ctx: &mut BindgenContext,
 ) -> Vec<(Option<String>, TypeId)> {
     let cursor_args = cursor.args().unwrap_or_default().into_iter();
@@ -407,8 +407,8 @@ fn args_from_ty_and_cursor(
 impl FunctionSig {
     /// Construct a new function signature from the given Clang type.
     pub(crate) fn from_ty(
-        ty: &clang::Type,
-        cursor: &clang::Cursor,
+        ty: &clang_ext::Type,
+        cursor: &clang_ext::Cursor,
         ctx: &mut BindgenContext,
     ) -> Result<Self, ParseError> {
         use clang_sys::*;
@@ -425,7 +425,7 @@ impl FunctionSig {
         // Don't parse operatorxx functions in C++
         let is_operator = |spelling: &str| {
             spelling.starts_with("operator") &&
-                !clang::is_valid_identifier(spelling)
+                !clang_ext::is_valid_identifier(spelling)
         };
         if is_operator(&spelling) {
             return Err(ParseError::Continue);
@@ -669,7 +669,7 @@ impl FunctionSig {
 
 impl ClangSubItemParser for Function {
     fn parse(
-        cursor: clang::Cursor,
+        cursor: clang_ext::Cursor,
         context: &mut BindgenContext,
     ) -> Result<ParseResult<Self>, ParseError> {
         use clang_sys::*;

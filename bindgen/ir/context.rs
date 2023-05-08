@@ -19,7 +19,7 @@ use super::module::{Module, ModuleKind};
 use super::template::{TemplateInstantiation, TemplateParameters};
 use super::traversal::{self, Edge, ItemTraversal};
 use super::ty::{FloatKind, Type, TypeKind};
-use crate::clang::{self, Cursor};
+use crate::clang_ext::{self, Cursor};
 use crate::codegen::CodegenError;
 use crate::BindgenOptions;
 use crate::{Entry, HashMap, HashSet};
@@ -317,7 +317,7 @@ pub(crate) struct BindgenContext {
 
     /// Maps from a cursor to the item ID of the named template type parameter
     /// for that cursor.
-    type_params: HashMap<clang::Cursor, TypeId>,
+    type_params: HashMap<clang_ext::Cursor, TypeId>,
 
     /// A cursor to module map. Similar reason than above.
     modules: HashMap<Cursor, ModuleId>,
@@ -334,7 +334,7 @@ pub(crate) struct BindgenContext {
     /// This is used to handle the cases where the semantic and the lexical
     /// parents of the cursor differ, like when a nested class is defined
     /// outside of the parent class.
-    semantic_parents: HashMap<clang::Cursor, ItemId>,
+    semantic_parents: HashMap<clang_ext::Cursor, ItemId>,
 
     /// A stack with the current type declarations and types we're parsing. This
     /// is needed to avoid infinite recursion when parsing a type like:
@@ -367,10 +367,10 @@ pub(crate) struct BindgenContext {
     in_codegen: bool,
 
     /// The translation unit for parsing.
-    translation_unit: clang::TranslationUnit,
+    translation_unit: clang_ext::TranslationUnit,
 
     /// Target information that can be useful for some stuff.
-    target_info: clang::TargetInfo,
+    target_info: clang_ext::TargetInfo,
 
     /// The options given by the user via cli or other medium.
     options: BindgenOptions,
@@ -522,12 +522,12 @@ impl BindgenContext {
     /// Construct the context for the given `options`.
     pub(crate) fn new(
         options: BindgenOptions,
-        input_unsaved_files: &[clang::UnsavedFile],
+        input_unsaved_files: &[clang_ext::UnsavedFile],
     ) -> Self {
         // TODO(emilio): Use the CXTargetInfo here when available.
         //
         // see: https://reviews.llvm.org/D32389
-        let index = clang::Index::new(false, true);
+        let index = clang_ext::Index::new(false, true);
 
         let parse_options =
             clang_sys::CXTranslationUnit_DetailedPreprocessingRecord;
@@ -536,7 +536,7 @@ impl BindgenContext {
             let _t =
                 Timer::new("translation_unit").with_output(options.time_phases);
 
-            clang::TranslationUnit::parse(
+            clang_ext::TranslationUnit::parse(
                 &index,
                 "",
                 &options.clang_args,
@@ -551,7 +551,7 @@ impl BindgenContext {
 If you encounter an error missing from this list, please file an issue or a PR!")
         };
 
-        let target_info = clang::TargetInfo::new(&translation_unit);
+        let target_info = clang_ext::TargetInfo::new(&translation_unit);
         let root_module = Self::build_root_module(ItemId(0));
         let root_module_id = root_module.id().as_module_id_unchecked();
 
@@ -779,7 +779,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     pub(crate) fn add_type_param(
         &mut self,
         item: Item,
-        definition: clang::Cursor,
+        definition: clang_ext::Cursor,
     ) {
         debug!(
             "BindgenContext::add_type_param: item = {:?}; definition = {:?}",
@@ -817,7 +817,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// already added one.
     pub(crate) fn get_type_param(
         &self,
-        definition: &clang::Cursor,
+        definition: &clang_ext::Cursor,
     ) -> Option<TypeId> {
         assert_eq!(
             definition.kind(),
@@ -892,7 +892,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// Gather all the unresolved type references.
     fn collect_typerefs(
         &mut self,
-    ) -> Vec<(ItemId, clang::Type, clang::Cursor, Option<ItemId>)> {
+    ) -> Vec<(ItemId, clang_ext::Type, clang_ext::Cursor, Option<ItemId>)> {
         debug_assert!(!self.collected_typerefs);
         self.collected_typerefs = true;
         let mut typerefs = vec![];
@@ -1493,7 +1493,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// not sure it's worth it.
     pub(crate) fn add_semantic_parent(
         &mut self,
-        definition: clang::Cursor,
+        definition: clang_ext::Cursor,
         parent_id: ItemId,
     ) {
         self.semantic_parents.insert(definition, parent_id);
@@ -1502,7 +1502,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// Returns a known semantic parent for a given definition.
     pub(crate) fn known_semantic_parent(
         &self,
-        definition: clang::Cursor,
+        definition: clang_ext::Cursor,
     ) -> Option<ItemId> {
         self.semantic_parents.get(&definition).cloned()
     }
@@ -1607,8 +1607,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         &mut self,
         with_id: ItemId,
         template: TypeId,
-        ty: &clang::Type,
-        location: clang::Cursor,
+        ty: &clang_ext::Type,
+        location: clang_ext::Cursor,
     ) -> Option<TypeId> {
         let num_expected_args =
             self.resolve_type(template).num_self_template_params(self);
@@ -1815,7 +1815,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// return its `ItemId`. Otherwise, return `None`.
     pub(crate) fn get_resolved_type(
         &self,
-        decl: &clang::CanonicalTypeDeclaration,
+        decl: &clang_ext::CanonicalTypeDeclaration,
     ) -> Option<TypeId> {
         self.types
             .get(&TypeKey::Declaration(*decl.cursor()))
@@ -1833,8 +1833,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         &mut self,
         with_id: ItemId,
         parent_id: Option<ItemId>,
-        ty: &clang::Type,
-        location: Option<clang::Cursor>,
+        ty: &clang_ext::Type,
+        location: Option<clang_ext::Cursor>,
     ) -> Option<TypeId> {
         use clang_sys::{CXCursor_TypeAliasTemplateDecl, CXCursor_TypeRef};
         debug!(
@@ -1904,7 +1904,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: &clang::Type,
+        ty: &clang_ext::Type,
     ) -> TypeId {
         self.build_wrapper(with_id, wrapped_id, parent_id, ty, ty.is_const())
     }
@@ -1917,7 +1917,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: &clang::Type,
+        ty: &clang_ext::Type,
     ) -> TypeId {
         self.build_wrapper(
             with_id, wrapped_id, parent_id, ty, /* is_const = */ true,
@@ -1929,7 +1929,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: &clang::Type,
+        ty: &clang_ext::Type,
         is_const: bool,
     ) -> TypeId {
         let spelling = ty.spelling();
@@ -1956,7 +1956,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         ret
     }
 
-    fn build_builtin_ty(&mut self, ty: &clang::Type) -> Option<TypeId> {
+    fn build_builtin_ty(&mut self, ty: &clang_ext::Type) -> Option<TypeId> {
         use clang_sys::*;
         let type_kind = match ty.kind() {
             CXType_NullPtr => TypeKind::NullPtr,
@@ -2020,7 +2020,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     }
 
     /// Get the current Clang translation unit that is being processed.
-    pub(crate) fn translation_unit(&self) -> &clang::TranslationUnit {
+    pub(crate) fn translation_unit(&self) -> &clang_ext::TranslationUnit {
         &self.translation_unit
     }
 
@@ -2106,7 +2106,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// namespace.
     fn tokenize_namespace(
         &self,
-        cursor: &clang::Cursor,
+        cursor: &clang_ext::Cursor,
     ) -> (Option<String>, ModuleKind) {
         assert_eq!(
             cursor.kind(),
@@ -2183,7 +2183,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
 
     /// Given a CXCursor_Namespace cursor, return the item ID of the
     /// corresponding module, or create one on the fly.
-    pub(crate) fn module(&mut self, cursor: clang::Cursor) -> ModuleId {
+    pub(crate) fn module(&mut self, cursor: clang_ext::Cursor) -> ModuleId {
         use clang_sys::*;
         assert_eq!(cursor.kind(), CXCursor_Namespace, "Be a nice person");
         let cursor = cursor.canonical();

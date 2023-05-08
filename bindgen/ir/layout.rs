@@ -2,7 +2,7 @@
 
 use super::derive::CanDerive;
 use super::ty::{Type, TypeKind, RUST_DERIVE_IN_ARRAY_LIMIT};
-use crate::clang;
+use crate::clang_ext;
 use crate::ir::context::BindgenContext;
 use std::cmp;
 
@@ -89,7 +89,7 @@ pub(crate) struct Opaque(pub(crate) Layout);
 impl Opaque {
     /// Construct a new opaque type from the given clang type.
     pub(crate) fn from_clang_ty(
-        ty: &clang::Type,
+        ty: &clang_ext::Type,
         ctx: &BindgenContext,
     ) -> Type {
         let layout = Layout::new(ty.size(ctx), ty.align(ctx));

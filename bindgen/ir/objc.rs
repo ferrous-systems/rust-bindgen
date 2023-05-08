@@ -5,7 +5,7 @@ use super::function::FunctionSig;
 use super::item::Item;
 use super::traversal::{Trace, Tracer};
 use super::ty::TypeKind;
-use crate::clang;
+use crate::clang_ext;
 use clang_sys::CXChildVisit_Continue;
 use clang_sys::CXCursor_ObjCCategoryDecl;
 use clang_sys::CXCursor_ObjCClassMethodDecl;
@@ -122,7 +122,7 @@ impl ObjCInterface {
 
     /// Parses the Objective C interface from the cursor
     pub(crate) fn from_ty(
-        cursor: &clang::Cursor,
+        cursor: &clang_ext::Cursor,
         ctx: &mut BindgenContext,
     ) -> Option<Self> {
         let name = cursor.spelling();

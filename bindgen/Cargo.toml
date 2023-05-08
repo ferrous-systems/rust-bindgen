@@ -27,7 +27,7 @@ path = "lib.rs"
 [dependencies]
 bitflags = "2.2.1"
 cexpr = "0.6"
-clang-sys = { version = "1", features = ["clang_6_0"] }
+clang = { version = "1", features = ["clang_6_0"] }
 lazycell = "1"
 lazy_static = "1"
 peeking_take_while = "0.1.2"
@@ -45,8 +45,8 @@ log = { version = "0.4", optional = true }
 [features]
 default = ["logging", "runtime", "which-rustfmt"]
 logging = ["log"]
-static = ["clang-sys/static"]
-runtime = ["clang-sys/runtime"]
+static = ["clang/static"]
+runtime = ["clang/runtime"]
 # Dynamically discover a `rustfmt` binary using the `which` crate
 which-rustfmt = ["which"]
 experimental = ["annotate-snippets"]

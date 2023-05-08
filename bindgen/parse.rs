@@ -1,7 +1,7 @@
 //! Common traits and types related to parsing our IR from Clang cursors.
 #![deny(clippy::missing_docs_in_private_items)]
 
-use crate::clang;
+use crate::clang_ext;
 use crate::ir::context::{BindgenContext, ItemId};
 
 /// Not so much an error in the traditional sense, but a control flow message
@@ -24,7 +24,7 @@ pub(crate) enum ParseResult<T> {
 
     /// This is a newly parsed item. If the cursor is `Some`, it points to the
     /// AST node where the new `T` was declared.
-    New(T, Option<clang::Cursor>),
+    New(T, Option<clang_ext::Cursor>),
 }
 
 /// An intermediate representation "sub-item" (i.e. one of the types contained
@@ -35,7 +35,7 @@ pub(crate) trait ClangSubItemParser: Sized {
     /// The fact that is a reference guarantees it's held by the context, and
     /// allow returning already existing types.
     fn parse(
-        cursor: clang::Cursor,
+        cursor: clang_ext::Cursor,
         context: &mut BindgenContext,
     ) -> Result<ParseResult<Self>, ParseError>;
 }

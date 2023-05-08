@@ -13,7 +13,7 @@ use super::template::{
     AsTemplateParam, TemplateInstantiation, TemplateParameters,
 };
 use super::traversal::{EdgeKind, Trace, Tracer};
-use crate::clang::{self, Cursor};
+use crate::clang_ext::{self, Cursor};
 use crate::parse::{ParseError, ParseResult};
 use std::borrow::Cow;
 use std::io;
@@ -234,7 +234,7 @@ impl Type {
         match self.kind {
             TypeKind::TypeParam => {
                 let name = self.name().expect("Unnamed named type?");
-                !clang::is_valid_identifier(name)
+                !clang_ext::is_valid_identifier(name)
             }
             _ => false,
         }
@@ -242,7 +242,7 @@ impl Type {
 
     /// Takes `name`, and returns a suitable identifier representation for it.
     fn sanitize_name(name: &str) -> Cow<str> {
-        if clang::is_valid_identifier(name) {
+        if clang_ext::is_valid_identifier(name) {
             return Cow::Borrowed(name);
         }
 
@@ -634,8 +634,8 @@ pub(crate) enum TypeKind {
     ///
     /// see tests/headers/typeref.hpp to see somewhere where this is a problem.
     UnresolvedTypeRef(
-        clang::Type,
-        clang::Cursor,
+        clang_ext::Type,
+        clang_ext::Cursor,
         /* parent_id */
         Option<ItemId>,
     ),
@@ -667,7 +667,7 @@ impl Type {
     /// comments in every special case justify why they're there.
     pub(crate) fn from_clang_ty(
         potential_id: ItemId,
-        ty: &clang::Type,
+        ty: &clang_ext::Type,
         location: Cursor,
         parent_id: Option<ItemId>,
         ctx: &mut BindgenContext,
@@ -1117,7 +1117,7 @@ impl Type {
 
                     if !is_anonymous {
                         let pretty_name = ty.spelling();
-                        if clang::is_valid_identifier(&pretty_name) {
+                        if clang_ext::is_valid_identifier(&pretty_name) {
                             name = Some(pretty_name);
                         }
                     }
@@ -1137,7 +1137,7 @@ impl Type {
                         // The pretty-printed name may contain typedefed name,
                         // but may also be "struct (anonymous at .h:1)"
                         let pretty_name = ty.spelling();
-                        if clang::is_valid_identifier(&pretty_name) {
+                        if clang_ext::is_valid_identifier(&pretty_name) {
                             name = Some(pretty_name);
                         }
                     }

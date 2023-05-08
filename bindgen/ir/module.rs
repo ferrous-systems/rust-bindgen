@@ -3,7 +3,7 @@
 use super::context::BindgenContext;
 use super::dot::DotAttributes;
 use super::item::ItemSet;
-use crate::clang;
+use crate::clang_ext;
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 use crate::parse_one;
 use std::io;
@@ -74,7 +74,7 @@ impl DotAttributes for Module {
 
 impl ClangSubItemParser for Module {
     fn parse(
-        cursor: clang::Cursor,
+        cursor: clang_ext::Cursor,
         ctx: &mut BindgenContext,
     ) -> Result<ParseResult<Self>, ParseError> {
         use clang_sys::*;

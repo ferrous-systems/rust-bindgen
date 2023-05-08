@@ -4375,7 +4375,7 @@ impl CodeGenerator for Function {
 
 fn unsupported_abi_diagnostic<const VARIADIC: bool>(
     fn_name: &str,
-    _location: Option<&crate::clang::SourceLocation>,
+    _location: Option<&crate::clang_ext::SourceLocation>,
     abi: &str,
     _ctx: &BindgenContext,
 ) {
@@ -4420,7 +4420,7 @@ fn unsupported_abi_diagnostic<const VARIADIC: bool>(
 
 fn variadic_fn_diagnostic(
     fn_name: &str,
-    _location: Option<&crate::clang::SourceLocation>,
+    _location: Option<&crate::clang_ext::SourceLocation>,
     _ctx: &BindgenContext,
 ) {
     warn!(
