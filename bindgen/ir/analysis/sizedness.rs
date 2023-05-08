@@ -103,7 +103,7 @@ impl ops::BitOrAssign for SizednessResult {
 /// * For type parameters, `DependsOnTypeParam` is assigned.
 #[derive(Debug)]
 pub(crate) struct SizednessAnalysis<'ctx> {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
     dependencies: HashMap<TypeId, Vec<TypeId>>,
     // Incremental results of the analysis. Missing entries are implicitly
     // considered `ZeroSized`.
@@ -164,7 +164,7 @@ impl<'ctx> SizednessAnalysis<'ctx> {
 
 impl<'ctx> MonotoneFramework for SizednessAnalysis<'ctx> {
     type Node = TypeId;
-    type Extra = &'ctx BindgenContext;
+    type Extra = &'ctx BindgenContext<'ctx>;
     type Output = HashMap<TypeId, SizednessResult>;
 
     fn new(ctx: &'ctx BindgenContext) -> SizednessAnalysis<'ctx> {

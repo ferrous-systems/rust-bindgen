@@ -36,6 +36,6 @@ pub(crate) trait ClangSubItemParser: Sized {
     /// allow returning already existing types.
     fn parse<'tu>(
         cursor: clang::Cursor<'tu>,
-        context: &mut BindgenContext,
+        context: &mut BindgenContext<'tu>,
     ) -> Result<ParseResult<'tu, Self>, ParseError>;
 }

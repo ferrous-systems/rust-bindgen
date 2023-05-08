@@ -13,7 +13,7 @@ pub(crate) trait DotAttributes {
     /// be its own `<tr>...</tr>`.
     fn dot_attributes<W>(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'_>,
         out: &mut W,
     ) -> io::Result<()>
     where

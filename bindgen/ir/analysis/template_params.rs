@@ -147,7 +147,7 @@ use crate::{HashMap, HashSet};
 /// documentation for details.
 #[derive(Debug, Clone)]
 pub(crate) struct UsedTemplateParameters<'ctx> {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
 
     // The Option is only there for temporary moves out of the hash map. See the
     // comments in `UsedTemplateParameters::constrain` below.
@@ -373,7 +373,7 @@ impl<'ctx> UsedTemplateParameters<'ctx> {
 
 impl<'ctx> MonotoneFramework for UsedTemplateParameters<'ctx> {
     type Node = ItemId;
-    type Extra = &'ctx BindgenContext;
+    type Extra = &'ctx BindgenContext<'ctx>;
     type Output = HashMap<ItemId, ItemSet>;
 
     fn new(ctx: &'ctx BindgenContext) -> UsedTemplateParameters<'ctx> {

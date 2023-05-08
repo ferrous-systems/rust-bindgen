@@ -372,10 +372,10 @@ pub(crate) fn cursor_mangling(
     Some(mangling)
 }
 
-fn args_from_ty_and_cursor(
-    ty: clang::Type<'_>,
-    cursor: clang::Cursor<'_>,
-    ctx: &mut BindgenContext,
+fn args_from_ty_and_cursor<'tu>(
+    ty: clang::Type<'tu>,
+    cursor: clang::Cursor<'tu>,
+    ctx: &mut BindgenContext<'tu>,
 ) -> Vec<(Option<String>, TypeId)> {
     let cursor_args = cursor.args().unwrap_or_default().into_iter();
     let type_args = ty.args().unwrap_or_default().into_iter();
@@ -412,10 +412,10 @@ fn args_from_ty_and_cursor(
 
 impl FunctionSig {
     /// Construct a new function signature from the given Clang type.
-    pub(crate) fn from_ty(
-        ty: clang::Type<'_>,
-        cursor: clang::Cursor<'_>,
-        ctx: &mut BindgenContext,
+    pub(crate) fn from_ty<'tu>(
+        ty: clang::Type<'tu>,
+        cursor: clang::Cursor<'tu>,
+        ctx: &mut BindgenContext<'tu>,
     ) -> Result<Self, ParseError> {
         debug!("FunctionSig::from_ty {:?} {:?}", ty, cursor);
 
@@ -681,7 +681,7 @@ impl FunctionSig {
 impl ClangSubItemParser for Function {
     fn parse<'tu>(
         cursor: clang::Cursor<'tu>,
-        context: &mut BindgenContext,
+        context: &mut BindgenContext<'tu>,
     ) -> Result<ParseResult<'tu, Self>, ParseError> {
         let kind = match FunctionKind::from_cursor(cursor) {
             None => return Err(ParseError::Continue),

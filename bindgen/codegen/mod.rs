@@ -20,6 +20,7 @@ use self::struct_layout::StructLayoutTracker;
 use super::BindgenOptions;
 
 use crate::callbacks::{DeriveInfo, TypeKind as DeriveTypeKind};
+use crate::clang::{FileExt, SourceLocationExt};
 use crate::ir::analysis::{HasVtable, Sizedness};
 use crate::ir::annotations::{
     Annotations, FieldAccessorKind, FieldVisibilityKind,
@@ -458,7 +459,7 @@ impl AppendImplicitTemplateParams for proc_macro2::TokenStream {
     }
 }
 
-trait CodeGenerator {
+trait CodeGenerator<'tu> {
     /// Extra information from the caller.
     type Extra;
 
@@ -473,7 +474,7 @@ trait CodeGenerator {
     ) -> Self::Return;
 }
 
-impl Item {
+impl<'tu> Item<'tu> {
     fn process_before_codegen(
         &self,
         ctx: &BindgenContext,
@@ -504,7 +505,7 @@ impl Item {
     }
 }
 
-impl CodeGenerator for Item {
+impl<'tu> CodeGenerator<'tu> for Item<'tu> {
     type Extra = ();
     type Return = ();
 
@@ -536,8 +537,8 @@ impl CodeGenerator for Item {
     }
 }
 
-impl CodeGenerator for Module {
-    type Extra = Item;
+impl<'tu> CodeGenerator<'tu> for Module {
+    type Extra = Item<'tu>;
     type Return = ();
 
     fn codegen(
@@ -628,8 +629,8 @@ impl CodeGenerator for Module {
     }
 }
 
-impl CodeGenerator for Var {
-    type Extra = Item;
+impl<'tu> CodeGenerator<'tu> for Var {
+    type Extra = Item<'tu>;
     type Return = ();
 
     fn codegen(
@@ -787,8 +788,8 @@ impl CodeGenerator for Var {
     }
 }
 
-impl CodeGenerator for Type {
-    type Extra = Item;
+impl<'tu> CodeGenerator<'tu> for Type<'tu> {
+    type Extra = Item<'tu>;
     type Return = ();
 
     fn codegen(
@@ -1110,8 +1111,8 @@ impl<'a> Vtable<'a> {
     }
 }
 
-impl<'a> CodeGenerator for Vtable<'a> {
-    type Extra = Item;
+impl<'a> CodeGenerator<'a> for Vtable<'a> {
+    type Extra = Item<'a>;
     type Return = ();
 
     fn codegen(
@@ -1194,7 +1195,7 @@ impl<'a> ItemCanonicalName for Vtable<'a> {
     }
 }
 
-impl<'a> TryToRustTy for Vtable<'a> {
+impl<'a> TryToRustTy<'a> for Vtable<'a> {
     type Extra = ();
 
     fn try_to_rust_ty(
@@ -1209,8 +1210,8 @@ impl<'a> TryToRustTy for Vtable<'a> {
     }
 }
 
-impl CodeGenerator for TemplateInstantiation {
-    type Extra = Item;
+impl<'tu> CodeGenerator<'tu> for TemplateInstantiation {
+    type Extra = Item<'tu>;
     type Return = ();
 
     fn codegen(
@@ -1893,8 +1894,8 @@ impl<'a> FieldCodegen<'a> for Bitfield {
     }
 }
 
-impl CodeGenerator for CompInfo {
-    type Extra = Item;
+impl<'tu> CodeGenerator<'tu> for CompInfo {
+    type Extra = Item<'tu>;
     type Return = ();
 
     fn codegen(
@@ -3129,8 +3130,8 @@ impl<'a> EnumBuilder<'a> {
     }
 }
 
-impl CodeGenerator for Enum {
-    type Extra = Item;
+impl<'tu> CodeGenerator<'tu> for Enum {
+    type Extra = Item<'tu>;
     type Return = ();
 
     fn codegen(
@@ -3599,20 +3600,20 @@ impl std::str::FromStr for NonCopyUnionStyle {
 /// Implementors of this trait should provide the `try_get_layout` method to
 /// fallibly get this thing's layout, which the provided `try_to_opaque` trait
 /// method will use to convert the `Layout` into an opaque blob Rust type.
-trait TryToOpaque {
+trait TryToOpaque<'tu> {
     type Extra;
 
     /// Get the layout for this thing, if one is available.
     fn try_get_layout(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'tu>,
         extra: &Self::Extra,
     ) -> error::Result<Layout>;
 
     /// Do not override this provided trait method.
     fn try_to_opaque(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'tu>,
         extra: &Self::Extra,
     ) -> error::Result<proc_macro2::TokenStream> {
         self.try_get_layout(ctx, extra)
@@ -3630,15 +3631,19 @@ trait TryToOpaque {
 ///
 /// Don't implement this directly. Instead implement `TryToOpaque`, and then
 /// leverage the blanket impl for this trait.
-trait ToOpaque: TryToOpaque {
-    fn get_layout(&self, ctx: &BindgenContext, extra: &Self::Extra) -> Layout {
+trait ToOpaque<'tu>: TryToOpaque<'tu> {
+    fn get_layout(
+        &self,
+        ctx: &BindgenContext<'tu>,
+        extra: &Self::Extra,
+    ) -> Layout {
         self.try_get_layout(ctx, extra)
             .unwrap_or_else(|_| Layout::for_size(ctx, 1))
     }
 
     fn to_opaque(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'tu>,
         extra: &Self::Extra,
     ) -> proc_macro2::TokenStream {
         let layout = self.get_layout(ctx, extra);
@@ -3646,7 +3651,7 @@ trait ToOpaque: TryToOpaque {
     }
 }
 
-impl<T> ToOpaque for T where T: TryToOpaque {}
+impl<'tu, T> ToOpaque<'tu> for T where T: TryToOpaque<'tu> {}
 
 /// Fallible conversion from an IR thing to an *equivalent* Rust type.
 ///
@@ -3655,12 +3660,12 @@ impl<T> ToOpaque for T where T: TryToOpaque {}
 /// const-value generic parameters) then the impl should return an `Err`. It
 /// should *not* attempt to return an opaque blob with the correct size and
 /// alignment. That is the responsibility of the `TryToOpaque` trait.
-trait TryToRustTy {
+trait TryToRustTy<'tu> {
     type Extra;
 
     fn try_to_rust_ty(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'tu>,
         extra: &Self::Extra,
     ) -> error::Result<proc_macro2::TokenStream>;
 }
@@ -3670,25 +3675,25 @@ trait TryToRustTy {
 ///
 /// Don't implement this directly. Instead implement `TryToRustTy` and
 /// `TryToOpaque`, and then leverage the blanket impl for this trait below.
-trait TryToRustTyOrOpaque: TryToRustTy + TryToOpaque {
+trait TryToRustTyOrOpaque<'tu>: TryToRustTy<'tu> + TryToOpaque<'tu> {
     type Extra;
 
     fn try_to_rust_ty_or_opaque(
         &self,
-        ctx: &BindgenContext,
-        extra: &<Self as TryToRustTyOrOpaque>::Extra,
+        ctx: &BindgenContext<'tu>,
+        extra: &<Self as TryToRustTyOrOpaque<'tu>>::Extra,
     ) -> error::Result<proc_macro2::TokenStream>;
 }
 
-impl<E, T> TryToRustTyOrOpaque for T
+impl<'tu, E, T> TryToRustTyOrOpaque<'tu> for T
 where
-    T: TryToRustTy<Extra = E> + TryToOpaque<Extra = E>,
+    T: TryToRustTy<'tu, Extra = E> + TryToOpaque<'tu, Extra = E>,
 {
     type Extra = E;
 
     fn try_to_rust_ty_or_opaque(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'tu>,
         extra: &E,
     ) -> error::Result<proc_macro2::TokenStream> {
         self.try_to_rust_ty(ctx, extra).or_else(|_| {
@@ -3718,25 +3723,25 @@ where
 /// `ToRustTyOrOpaque`. The further out we push error recovery, the more likely
 /// we are to get a usable `Layout` even if we can't generate an equivalent Rust
 /// type for a C++ construct.
-trait ToRustTyOrOpaque: TryToRustTy + ToOpaque {
+trait ToRustTyOrOpaque<'tu>: TryToRustTy<'tu> + ToOpaque<'tu> {
     type Extra;
 
     fn to_rust_ty_or_opaque(
         &self,
-        ctx: &BindgenContext,
-        extra: &<Self as ToRustTyOrOpaque>::Extra,
+        ctx: &BindgenContext<'tu>,
+        extra: &<Self as ToRustTyOrOpaque<'tu>>::Extra,
     ) -> proc_macro2::TokenStream;
 }
 
-impl<E, T> ToRustTyOrOpaque for T
+impl<'tu, E, T> ToRustTyOrOpaque<'tu> for T
 where
-    T: TryToRustTy<Extra = E> + ToOpaque<Extra = E>,
+    T: TryToRustTy<'tu, Extra = E> + ToOpaque<'tu, Extra = E>,
 {
     type Extra = E;
 
     fn to_rust_ty_or_opaque(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'tu>,
         extra: &E,
     ) -> proc_macro2::TokenStream {
         self.try_to_rust_ty(ctx, extra)
@@ -3744,7 +3749,7 @@ where
     }
 }
 
-impl<T> TryToOpaque for T
+impl<'tu, T> TryToOpaque<'tu> for T
 where
     T: Copy + Into<ItemId>,
 {
@@ -3752,14 +3757,14 @@ where
 
     fn try_get_layout(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'tu>,
         _: &(),
     ) -> error::Result<Layout> {
         ctx.resolve_item((*self).into()).try_get_layout(ctx, &())
     }
 }
 
-impl<T> TryToRustTy for T
+impl<'tu, T> TryToRustTy<'tu> for T
 where
     T: Copy + Into<ItemId>,
 {
@@ -3774,7 +3779,7 @@ where
     }
 }
 
-impl TryToOpaque for Item {
+impl<'tu> TryToOpaque<'tu> for Item<'tu> {
     type Extra = ();
 
     fn try_get_layout(
@@ -3786,7 +3791,7 @@ impl TryToOpaque for Item {
     }
 }
 
-impl TryToRustTy for Item {
+impl<'tu> TryToRustTy<'tu> for Item<'tu> {
     type Extra = ();
 
     fn try_to_rust_ty(
@@ -3798,8 +3803,8 @@ impl TryToRustTy for Item {
     }
 }
 
-impl TryToOpaque for Type {
-    type Extra = Item;
+impl<'tu> TryToOpaque<'tu> for Type<'tu> {
+    type Extra = Item<'tu>;
 
     fn try_get_layout(
         &self,
@@ -3810,8 +3815,8 @@ impl TryToOpaque for Type {
     }
 }
 
-impl TryToRustTy for Type {
-    type Extra = Item;
+impl<'tu> TryToRustTy<'tu> for Type<'tu> {
+    type Extra = Item<'tu>;
 
     fn try_to_rust_ty(
         &self,
@@ -4009,8 +4014,8 @@ impl TryToRustTy for Type {
     }
 }
 
-impl TryToOpaque for TemplateInstantiation {
-    type Extra = Item;
+impl<'tu> TryToOpaque<'tu> for TemplateInstantiation {
+    type Extra = Item<'tu>;
 
     fn try_get_layout(
         &self,
@@ -4023,8 +4028,8 @@ impl TryToOpaque for TemplateInstantiation {
     }
 }
 
-impl TryToRustTy for TemplateInstantiation {
-    type Extra = Item;
+impl<'tu> TryToRustTy<'tu> for TemplateInstantiation {
+    type Extra = Item<'tu>;
 
     fn try_to_rust_ty(
         &self,
@@ -4090,7 +4095,7 @@ impl TryToRustTy for TemplateInstantiation {
     }
 }
 
-impl TryToRustTy for FunctionSig {
+impl<'tu> TryToRustTy<'tu> for FunctionSig {
     type Extra = ();
 
     fn try_to_rust_ty(
@@ -4134,8 +4139,8 @@ impl TryToRustTy for FunctionSig {
     }
 }
 
-impl CodeGenerator for Function {
-    type Extra = Item;
+impl<'tu> CodeGenerator<'tu> for Function {
+    type Extra = Item<'tu>;
 
     /// If we've actually generated the symbol, the number of times we've seen
     /// it.
@@ -4403,7 +4408,8 @@ fn unsupported_abi_diagnostic<const VARIADIC: bool>(
         if let Some(loc) = _location {
             let (file, line, col, _) = loc.location();
 
-            if let Some(filename) = file.name() {
+            if let Some(file) = file {
+                let filename = file.name();
                 if let Ok(Some(source)) = get_line(&filename, line) {
                     let mut slice = Slice::default();
                     slice
@@ -4441,7 +4447,8 @@ fn variadic_fn_diagnostic(
         if let Some(loc) = _location {
             let (file, line, col, _) = loc.location();
 
-            if let Some(filename) = file.name() {
+            if let Some(file) = file {
+                let filename = file.name();
                 if let Ok(Some(source)) = get_line(&filename, line) {
                     let mut slice = Slice::default();
                     slice
@@ -4514,8 +4521,8 @@ fn objc_method_codegen(
     });
 }
 
-impl CodeGenerator for ObjCInterface {
-    type Extra = Item;
+impl<'tu> CodeGenerator<'tu> for ObjCInterface {
+    type Extra = Item<'tu>;
     type Return = ();
 
     fn codegen(
@@ -4724,8 +4731,8 @@ impl CodeGenerator for ObjCInterface {
     }
 }
 
-pub(crate) fn codegen(
-    context: BindgenContext,
+pub(crate) fn codegen<'tu>(
+    context: BindgenContext<'tu>,
 ) -> Result<(proc_macro2::TokenStream, BindgenOptions), CodegenError> {
     context.gen(|context| {
         let _t = context.timer("codegen");
@@ -4835,7 +4842,7 @@ pub(crate) mod utils {
 
         if !context.options().input_headers.is_empty() {
             for header in &context.options().input_headers {
-                writeln!(code, "#include \"{}\"", header)?;
+                writeln!(code, "#include \"{}\"", header.display())?;
             }
 
             writeln!(code)?;
@@ -4843,7 +4850,7 @@ pub(crate) mod utils {
 
         if !context.options().input_header_contents.is_empty() {
             for (name, contents) in &context.options().input_header_contents {
-                writeln!(code, "// {}\n{}", name, contents)?;
+                writeln!(code, "// {}\n{}", name.display(), contents)?;
             }
 
             writeln!(code)?;

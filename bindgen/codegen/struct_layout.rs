@@ -15,7 +15,7 @@ const MAX_GUARANTEED_ALIGN: usize = 8;
 #[derive(Debug)]
 pub(crate) struct StructLayoutTracker<'a> {
     name: &'a str,
-    ctx: &'a BindgenContext,
+    ctx: &'a BindgenContext<'a>,
     comp: &'a CompInfo,
     is_packed: bool,
     known_type_layout: Option<Layout>,

@@ -53,28 +53,28 @@ impl Attribute {
     };
 }
 
-pub(crate) trait EntityExt<'tu> {
+pub(crate) trait EntityExt<'tu>: Sized + Copy {
     fn entity(self) -> Entity<'tu>;
     /// Get the Unified Symbol Resolution for this cursor's referent, if
     /// available.
     ///
     /// The USR can be used to compare entities across translation units.
-    fn usr(&self) -> Option<String> {
+    fn usr(self) -> Option<String> {
         self.entity().get_usr().map(|u| u.0)
     }
 
     /// Is this cursor's referent a declaration?
-    fn is_declaration(&self) -> bool {
+    fn is_declaration(self) -> bool {
         self.entity().is_declaration()
     }
 
     /// Is this cursor's referent an anonymous record or so?
-    fn is_anonymous(&self) -> bool {
+    fn is_anonymous(self) -> bool {
         self.entity().is_anonymous()
     }
 
     /// Get this cursor's referent's spelling.
-    fn spelling(&self) -> String {
+    fn spelling(self) -> String {
         self.entity().get_name().unwrap_or_default()
     }
 
@@ -82,23 +82,23 @@ pub(crate) trait EntityExt<'tu> {
     ///
     /// This is not necessarily a valid identifier. It includes extra
     /// information, such as parameters for a function, etc.
-    fn display_name(&self) -> Option<String> {
+    fn display_name(self) -> Option<String> {
         self.entity().get_display_name()
     }
 
     /// Get the mangled name of this cursor's referent.
-    fn mangling(&self) -> String {
+    fn mangling(self) -> String {
         self.entity().get_mangled_name().unwrap_or_default()
     }
 
     /// Gets the C++ manglings for this cursor, or an error if the manglings
     /// are not available.
-    fn cxx_manglings(&self) -> Option<Vec<String>> {
+    fn cxx_manglings(self) -> Option<Vec<String>> {
         self.entity().get_mangled_names()
     }
 
     /// Returns whether the cursor refers to a built-in definition.
-    fn is_builtin(&self) -> bool {
+    fn is_builtin(self) -> bool {
         self.entity().get_location().is_none()
     }
 
@@ -119,7 +119,7 @@ pub(crate) trait EntityExt<'tu> {
     ///
     /// void Foo::method() { /* ... */ }
     /// ```
-    fn lexical_parent(&self) -> Option<Cursor<'tu>> {
+    fn lexical_parent(self) -> Option<Cursor<'tu>> {
         self.entity().get_lexical_parent()
     }
 
@@ -127,7 +127,7 @@ pub(crate) trait EntityExt<'tu> {
     ///
     /// See documentation for `lexical_parent` for details on semantic vs
     /// lexical parents.
-    fn fallible_semantic_parent(&self) -> Option<Cursor<'tu>> {
+    fn fallible_semantic_parent(self) -> Option<Cursor<'tu>> {
         self.entity().get_semantic_parent()
     }
 
@@ -135,7 +135,7 @@ pub(crate) trait EntityExt<'tu> {
     ///
     /// See documentation for `lexical_parent` for details on semantic vs
     /// lexical parents.
-    fn semantic_parent(&self) -> Cursor<'tu> {
+    fn semantic_parent(self) -> Cursor<'tu> {
         self.fallible_semantic_parent().unwrap()
     }
 
@@ -145,7 +145,7 @@ pub(crate) trait EntityExt<'tu> {
     ///
     /// NOTE: This may not return `Some` for partial template specializations,
     /// see #193 and #194.
-    fn num_template_args(&self) -> Option<usize> {
+    fn num_template_args(self) -> Option<usize> {
         self.entity()
             .get_template_arguments()
             .map(|args| args.len())
@@ -157,12 +157,12 @@ pub(crate) trait EntityExt<'tu> {
     /// bindgen assumes there will only be one of them alive at a time, and
     /// disposes it on drop. That can change if this would be required, but I
     /// think we can survive fine without it.
-    fn translation_unit(&self) -> Cursor<'tu> {
+    fn translation_unit(self) -> Cursor<'tu> {
         self.entity().get_translation_unit().get_entity()
     }
 
     /// Is the referent a top level construct?
-    fn is_toplevel(&self) -> bool {
+    fn is_toplevel(self) -> bool {
         let mut semantic_parent = self.fallible_semantic_parent();
 
         while semantic_parent.is_some() &&
@@ -184,7 +184,7 @@ pub(crate) trait EntityExt<'tu> {
     /// There are a few kinds of types that we need to treat specially, mainly
     /// not tracking the type declaration but the location of the cursor, given
     /// clang doesn't expose a proper declaration for these types.
-    fn is_template_like(&self) -> bool {
+    fn is_template_like(self) -> bool {
         matches!(
             self.kind(),
             clang::EntityKind::ClassTemplate |
@@ -194,28 +194,28 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Is this Cursor pointing to a function-like macro definition?
-    fn is_macro_function_like(&self) -> bool {
+    fn is_macro_function_like(self) -> bool {
         self.entity().is_function_like_macro()
     }
 
     /// Get the kind of referent this cursor is pointing to.
-    fn kind(&self) -> EntityKind {
+    fn kind(self) -> EntityKind {
         self.entity().get_kind()
     }
 
     /// Returns true if the cursor is a definition
-    fn is_definition(&self) -> bool {
+    fn is_definition(self) -> bool {
         self.entity().is_definition()
     }
 
     /// Is the referent a template specialization?
-    fn is_template_specialization(&self) -> bool {
+    fn is_template_specialization(self) -> bool {
         self.specialized().is_some()
     }
 
     /// Is the referent a fully specialized template specialization without any
     /// remaining free template arguments?
-    fn is_fully_specialized_template(&self) -> bool {
+    fn is_fully_specialized_template(self) -> bool {
         self.is_template_specialization() &&
             self.kind() != EntityKind::ClassTemplatePartialSpecialization &&
             self.num_template_args().unwrap_or(0) > 0
@@ -223,7 +223,7 @@ pub(crate) trait EntityExt<'tu> {
 
     /// Is the referent a template specialization that still has remaining free
     /// template arguments?
-    fn is_in_non_fully_specialized_template(&self) -> bool {
+    fn is_in_non_fully_specialized_template(self) -> bool {
         if self.is_toplevel() {
             return false;
         }
@@ -241,7 +241,7 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Is the referent any kind of template parameter?
-    fn is_template_parameter(&self) -> bool {
+    fn is_template_parameter(self) -> bool {
         matches!(
             self.kind(),
             clang::EntityKind::TemplateTemplateParameter |
@@ -251,7 +251,7 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Does the referent's type or value depend on a template parameter?
-    fn is_dependent_on_template_parameter(&self) -> bool {
+    fn is_dependent_on_template_parameter(self) -> bool {
         fn visitor(
             found_template_parameter: &mut bool,
             cur: Cursor,
@@ -291,45 +291,45 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Is this cursor pointing a valid referent?
-    fn is_valid(&self) -> bool {
+    fn is_valid(self) -> bool {
         self.kind().is_valid()
     }
 
     /// Get the source location for the referent.
-    fn location(&self) -> Option<SourceLocation<'tu>> {
+    fn location(self) -> Option<SourceLocation<'tu>> {
         self.entity().get_location()
     }
 
     /// Get the source location range for the referent.
-    fn extent(&self) -> Option<clang::source::SourceRange<'tu>> {
+    fn extent(self) -> Option<clang::source::SourceRange<'tu>> {
         self.entity().get_range()
     }
 
     /// Get the raw declaration comment for this referent, if one exists.
-    fn raw_comment(&self) -> Option<String> {
+    fn raw_comment(self) -> Option<String> {
         self.entity().get_comment()
     }
 
     /// Get the referent's parsed comment.
-    fn comment(&self) -> Option<Comment<'tu>> {
+    fn comment(self) -> Option<Comment<'tu>> {
         self.entity().get_parsed_comment()
     }
 
     /// Get the referent's type.
-    fn cur_type(&self) -> Option<Type<'tu>> {
+    fn cur_type(self) -> Option<Type<'tu>> {
         self.entity().get_type()
     }
 
     /// Given that this cursor's referent is a reference to another type, or is
     /// a declaration, get the cursor pointing to the referenced type or type of
     /// the declared thing.
-    fn definition(&self) -> Option<Cursor> {
+    fn definition(self) -> Option<Cursor<'tu>> {
         self.entity().get_definition()
     }
 
     /// Given that this cursor's referent is reference type, get the cursor
     /// pointing to the referenced type.
-    fn referenced(&self) -> Option<Cursor> {
+    fn referenced(self) -> Option<Cursor<'tu>> {
         self.entity().get_reference()
     }
 
@@ -338,36 +338,36 @@ pub(crate) trait EntityExt<'tu> {
     /// Many types can be declared multiple times before finally being properly
     /// defined. This method allows us to get the canonical cursor for the
     /// referent type.
-    fn canonical(&self) -> Cursor {
+    fn canonical(self) -> Cursor<'tu> {
         self.entity().get_canonical_entity()
     }
 
     /// Given that this cursor points to either a template specialization or a
     /// template instantiation, get a cursor pointing to the template definition
     /// that is being specialized.
-    fn specialized(&self) -> Option<Cursor> {
+    fn specialized(self) -> Option<Cursor<'tu>> {
         self.entity().get_template()
     }
 
     /// Assuming that this cursor's referent is a template declaration, get the
     /// kind of cursor that would be generated for its specializations.
-    fn template_kind(&self) -> Option<EntityKind> {
+    fn template_kind(self) -> Option<EntityKind> {
         self.entity().get_template_kind()
     }
 
     /// Traverse this cursor's referent and its children.
     ///
     /// Call the given function on each AST node traversed.
-    fn visit<Visitor>(&self, mut visitor: Visitor)
+    fn visit<Visitor>(self, mut visitor: Visitor)
     where
-        Visitor: FnMut(Cursor) -> clang::EntityVisitResult,
+        Visitor: FnMut(Cursor<'tu>) -> clang::EntityVisitResult,
     {
         self.entity()
             .visit_children(|entity, _parent| visitor(entity));
     }
 
     /// Collect all of this cursor's children into a vec and return them.
-    fn collect_children(&self) -> Vec<Cursor> {
+    fn collect_children(self) -> Vec<Cursor<'tu>> {
         let mut children = vec![];
         self.visit(|c| {
             children.push(c);
@@ -377,7 +377,7 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Does this cursor have any children?
-    fn has_children(&self) -> bool {
+    fn has_children(self) -> bool {
         let mut has_children = false;
         self.visit(|_| {
             has_children = true;
@@ -387,7 +387,7 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Does this cursor have at least `n` children?
-    fn has_at_least_num_children(&self, n: usize) -> bool {
+    fn has_at_least_num_children(self, n: usize) -> bool {
         assert!(n > 0);
         let mut num_left = n;
         self.visit(|_| {
@@ -404,7 +404,7 @@ pub(crate) trait EntityExt<'tu> {
     /// Returns whether the given location contains a cursor with the given
     /// kind in the first level of nesting underneath (doesn't look
     /// recursively).
-    fn contains_cursor(&self, kind: EntityKind) -> bool {
+    fn contains_cursor(self, kind: EntityKind) -> bool {
         let mut found = false;
 
         self.visit(|c| {
@@ -420,17 +420,17 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Is the referent an inlined function?
-    fn is_inlined_function(&self) -> bool {
+    fn is_inlined_function(self) -> bool {
         self.entity().is_inline_function()
     }
 
     /// Is the referent a defaulted function?
-    fn is_defaulted_function(&self) -> bool {
+    fn is_defaulted_function(self) -> bool {
         self.entity().is_defaulted()
     }
 
     /// Is the referent a deleted function?
-    fn is_deleted_function(&self) -> bool {
+    fn is_deleted_function(self) -> bool {
         // Unfortunately, libclang doesn't yet have an API for checking if a
         // member function is deleted, but the following should be a good
         // enough approximation.
@@ -446,13 +446,13 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Is the referent a bit field declaration?
-    fn is_bit_field(&self) -> bool {
+    fn is_bit_field(self) -> bool {
         self.entity().is_bit_field()
     }
 
     /// Get a cursor to the bit field's width expression, or `None` if it's not
     /// a bit field.
-    fn bit_width_expr(&self) -> Option<Cursor> {
+    fn bit_width_expr(self) -> Option<Cursor<'tu>> {
         if !self.is_bit_field() {
             return None;
         }
@@ -476,7 +476,7 @@ pub(crate) trait EntityExt<'tu> {
 
     /// Get the width of this cursor's referent bit field, or `None` if the
     /// referent is not a bit field or if the width could not be evaluated.
-    fn bit_width(&self) -> Option<usize> {
+    fn bit_width(self) -> Option<usize> {
         // It is not safe to check the bit width without ensuring it doesn't
         // depend on a template parameter. See
         // https://github.com/rust-lang/rust-bindgen/issues/2239
@@ -489,14 +489,14 @@ pub(crate) trait EntityExt<'tu> {
 
     /// Get the integer representation type used to hold this cursor's referent
     /// enum type.
-    fn enum_type(&self) -> Option<Type<'tu>> {
+    fn enum_type(self) -> Option<Type<'tu>> {
         self.entity().get_enum_underlying_type()
     }
 
     /// Get the boolean constant value for this cursor's enum variant referent.
     ///
     /// Returns None if the cursor's referent is not an enum variant.
-    fn enum_val_boolean(&self) -> Option<bool> {
+    fn enum_val_boolean(self) -> Option<bool> {
         self.entity()
             .get_enum_constant_value()
             .map(|(signed, _unsigned)| signed != 0)
@@ -505,7 +505,7 @@ pub(crate) trait EntityExt<'tu> {
     /// Get the signed constant value for this cursor's enum variant referent.
     ///
     /// Returns None if the cursor's referent is not an enum variant.
-    fn enum_val_signed(&self) -> Option<i64> {
+    fn enum_val_signed(self) -> Option<i64> {
         self.entity()
             .get_enum_constant_value()
             .map(|(signed, _unsigned)| signed)
@@ -514,14 +514,14 @@ pub(crate) trait EntityExt<'tu> {
     /// Get the unsigned constant value for this cursor's enum variant referent.
     ///
     /// Returns None if the cursor's referent is not an enum variant.
-    fn enum_val_unsigned(&self) -> Option<u64> {
+    fn enum_val_unsigned(self) -> Option<u64> {
         self.entity()
             .get_enum_constant_value()
             .map(|(_signed, unsigned)| unsigned)
     }
 
     /// Does this cursor have the given attributes?
-    fn has_attrs<const N: usize>(&self, attrs: &[Attribute; N]) -> [bool; N] {
+    fn has_attrs<const N: usize>(self, attrs: &[Attribute; N]) -> [bool; N] {
         let mut found_attrs = [false; N];
         let mut found_count = 0;
 
@@ -556,19 +556,19 @@ pub(crate) trait EntityExt<'tu> {
 
     /// Given that this cursor's referent is a `typedef`, get the `Type` that is
     /// being aliased.
-    fn typedef_type(&self) -> Option<Type<'tu>> {
+    fn typedef_type(self) -> Option<Type<'tu>> {
         self.entity().get_typedef_underlying_type()
     }
 
     /// Get the linkage kind for this cursor's referent.
     ///
     /// This only applies to functions and variables.
-    fn linkage(&self) -> Option<clang::Linkage> {
+    fn linkage(self) -> Option<clang::Linkage> {
         self.entity().get_linkage()
     }
 
     /// Get the visibility of this cursor's referent.
-    fn visibility(&self) -> Option<clang::Visibility> {
+    fn visibility(self) -> Option<clang::Visibility> {
         self.entity().get_visibility()
     }
 
@@ -577,7 +577,7 @@ pub(crate) trait EntityExt<'tu> {
     ///
     /// Returns None if the cursor's referent is not a function/method call or
     /// declaration.
-    fn args(&self) -> Option<Vec<Cursor>> {
+    fn args(self) -> Option<Vec<Cursor<'tu>>> {
         self.entity().get_arguments()
     }
 
@@ -586,12 +586,12 @@ pub(crate) trait EntityExt<'tu> {
     ///
     /// Returns Err if the cursor's referent is not a function/method call or
     /// declaration.
-    fn num_args(&self) -> Option<usize> {
+    fn num_args(self) -> Option<usize> {
         self.entity().get_arguments().map(|args| args.len())
     }
 
     /// Get the access specifier for this cursor's referent.
-    fn access_specifier(&self) -> Option<clang::Accessibility> {
+    fn access_specifier(self) -> Option<clang::Accessibility> {
         self.entity().get_accessibility()
     }
 
@@ -599,59 +599,59 @@ pub(crate) trait EntityExt<'tu> {
     ///
     /// Returns true if self.access_specifier() is `CX_CXXPublic` or
     /// `CX_CXXInvalidAccessSpecifier`.
-    fn public_accessible(&self) -> bool {
+    fn public_accessible(self) -> bool {
         let access = self.access_specifier();
-        matches!(Some(clang::Accessibility::Public), access)
+        matches!(access, Some(clang::Accessibility::Public))
     }
 
     /// Is this cursor's referent a field declaration that is marked as
     /// `mutable`?
-    fn is_mutable_field(&self) -> bool {
+    fn is_mutable_field(self) -> bool {
         self.entity().is_mutable()
     }
 
     /// Get the offset of the field represented by the Cursor.
-    fn offset_of_field(&self) -> Result<usize, LayoutError> {
+    fn offset_of_field(self) -> Result<usize, LayoutError> {
         self.entity().get_offset_of_field().map_err(From::from)
     }
 
     /// Is this cursor's referent a member function that is declared `static`?
-    fn method_is_static(&self) -> bool {
+    fn method_is_static(self) -> bool {
         self.entity().is_static_method()
     }
 
     /// Is this cursor's referent a member function that is declared `const`?
-    fn method_is_const(&self) -> bool {
+    fn method_is_const(self) -> bool {
         self.entity().is_const_method()
     }
 
     /// Is this cursor's referent a member function that is virtual?
-    fn method_is_virtual(&self) -> bool {
+    fn method_is_virtual(self) -> bool {
         self.entity().is_virtual_method()
     }
 
     /// Is this cursor's referent a member function that is pure virtual?
-    fn method_is_pure_virtual(&self) -> bool {
+    fn method_is_pure_virtual(self) -> bool {
         self.entity().is_pure_virtual_method()
     }
 
     /// Is this cursor's referent a struct or class with virtual members?
-    fn is_virtual_base(&self) -> bool {
+    fn is_virtual_base(self) -> bool {
         self.entity().is_virtual_base()
     }
 
     /// Try to evaluate this cursor.
-    fn evaluate(&self) -> Option<EvalResult> {
+    fn evaluate(self) -> Option<EvalResult<'tu>> {
         EvalResult::new(self.entity())
     }
 
     /// Return the result type for this cursor
-    fn ret_type(&self) -> Option<Type> {
+    fn ret_type(self) -> Option<Type<'tu>> {
         self.entity().get_result_type()
     }
 
     /// Gets the tokens that correspond to that cursor.
-    fn tokens(&self) -> Vec<clang::token::Token<'tu>> {
+    fn tokens(self) -> Vec<clang::token::Token<'tu>> {
         self.entity()
             .get_range()
             .map(|range| range.tokenize())
@@ -659,7 +659,7 @@ pub(crate) trait EntityExt<'tu> {
     }
 
     /// Gets the tokens that correspond to that cursor as  `cexpr` tokens.
-    fn cexpr_tokens(&self) -> Vec<cexpr::token::Token> {
+    fn cexpr_tokens(self) -> Vec<cexpr::token::Token> {
         self.tokens()
             .into_iter()
             .filter_map(|token| token.as_cexpr_token())
@@ -669,7 +669,7 @@ pub(crate) trait EntityExt<'tu> {
     /// Obtain the real path name of a cursor of InclusionDirective kind.
     ///
     /// Returns None if the cursor does not include a file, otherwise the file's full name
-    fn get_included_file_name(&self) -> Option<PathBuf> {
+    fn get_included_file_name(self) -> Option<PathBuf> {
         self.entity().get_file().map(|file| file.get_path())
     }
 }
@@ -747,8 +747,8 @@ impl From<clang::OffsetofError> for LayoutError {
     }
 }
 
-pub(crate) trait TypeExt<'tu> {
-    fn ty(&self) -> Type<'tu>;
+pub(crate) trait TypeExt<'tu>: Copy {
+    fn ty(self) -> Type<'tu>;
 
     /// Get this type's kind.
     fn kind(&self) -> clang::TypeKind {
@@ -764,9 +764,9 @@ pub(crate) trait TypeExt<'tu> {
     fn canonical_declaration(
         &self,
         location: Option<Cursor<'tu>>,
-    ) -> Option<CanonicalTypeDeclaration> {
-        let mut declaration = self.declaration();
-        if let Some(declaration) = declaration {
+    ) -> Option<CanonicalTypeDeclaration<'tu>> {
+        let declaration = self.declaration();
+        if let Some(mut declaration) = declaration {
             if !declaration.is_valid() {
                 if let Some(mut location) = location {
                     if let Some(referenced) = location.referenced() {
@@ -1003,8 +1003,8 @@ pub(crate) trait TypeExt<'tu> {
 }
 
 impl<'tu> TypeExt<'tu> for Type<'tu> {
-    fn ty(&self) -> Type<'tu> {
-        *self
+    fn ty(self) -> Type<'tu> {
+        self
     }
 }
 
@@ -1078,11 +1078,12 @@ impl<'tu> FileExt<'tu> for File<'tu> {
 }
 
 pub(crate) trait TranslationUnitExt<'i> {
-    fn translation_unit(&self) -> TranslationUnit<'i>;
+    fn translation_unit(&'i self) -> &'i TranslationUnit<'i>;
+    fn translation_unit_mut(&'i mut self) -> &'i mut TranslationUnit<'i>;
 
     /// Parse a source file into a translation unit.
-    fn parse<'c, P: Into<PathBuf>>(
-        ix: &Index<'c>,
+    fn parse<P: Into<PathBuf>>(
+        ix: &'i Index<'i>,
         file: P,
         cmd_args: &[String],
         unsaved: &[UnsavedFile],
@@ -1097,19 +1098,23 @@ pub(crate) trait TranslationUnitExt<'i> {
 
     /// Get the Clang diagnostic information associated with this translation
     /// unit.
-    fn diags(&self) -> Vec<Diagnostic<'i>> {
+    fn diags(&'i self) -> Vec<Diagnostic<'i>> {
         self.translation_unit().get_diagnostics()
     }
 
     /// Get a cursor pointing to the root of this translation unit's AST.
-    fn cursor(&self) -> Cursor {
+    fn cursor(&'i self) -> Cursor<'i> {
         self.translation_unit().get_entity()
     }
 }
 
 impl<'i> TranslationUnitExt<'i> for TranslationUnit<'i> {
-    fn translation_unit(&self) -> TranslationUnit<'i> {
-        *self
+    fn translation_unit(&'i self) -> &'i TranslationUnit<'i> {
+        self
+    }
+
+    fn translation_unit_mut(&'i mut self) -> &'i mut TranslationUnit<'i> {
+        self
     }
 }
 
@@ -1283,15 +1288,13 @@ pub(crate) fn ast_dump(
         );
 
         if let Some(num_template_args) = ty.num_template_args() {
-            if num_template_args >= 0 {
-                print_indent(
-                    depth,
-                    format!(
-                        " {}number-of-template-args = {}",
-                        prefix, num_template_args
-                    ),
-                );
-            }
+            print_indent(
+                depth,
+                format!(
+                    " {}number-of-template-args = {}",
+                    prefix, num_template_args
+                ),
+            );
         }
 
         if let Some(num) = ty.num_elements() {
@@ -1407,13 +1410,13 @@ impl<'tu> EvalResult<'tu> {
             }
         }
         Some(EvalResult {
-            x: cursor.evaluate()?,
+            x: Entity::evaluate(&cursor)?,
             ty: cursor.cur_type()?.canonical_type(),
         })
     }
 
     /// Try to get back the result as a double.
-    fn as_double(&self) -> Option<f64> {
+    pub(crate) fn as_double(&self) -> Option<f64> {
         match self.x {
             clang::EvaluationResult::Float(float) => Some(float),
             _ => None,
@@ -1421,7 +1424,7 @@ impl<'tu> EvalResult<'tu> {
     }
 
     /// Try to get back the result as an integer.
-    fn as_int(&self) -> Option<i64> {
+    pub(crate) fn as_int(&self) -> Option<i64> {
         match self.x {
             clang::EvaluationResult::SignedInteger(int) => Some(int),
             _ => None,
@@ -1430,8 +1433,8 @@ impl<'tu> EvalResult<'tu> {
 
     /// Evaluates the expression as a literal string, that may or may not be
     /// valid utf-8.
-    fn as_literal_string(&self) -> Option<Vec<u8>> {
-        match self.x {
+    pub(crate) fn as_literal_string(&self) -> Option<Vec<u8>> {
+        match &self.x {
             clang::EvaluationResult::String(str) => {
                 let char_ty =
                     self.ty.pointee_type().or_else(|| self.ty.elem_type())?;
@@ -1469,10 +1472,6 @@ impl<'tu> TokenExt<'tu> for clang::token::Token<'tu> {
             // NB: cexpr is not too happy about comments inside
             // expressions, so we strip them down here.
             TokenKind::Comment => return None,
-            _ => {
-                warn!("Found unexpected token kind: {:?}", self);
-                return None;
-            }
         };
 
         Some(token::Token {

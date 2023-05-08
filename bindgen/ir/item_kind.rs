@@ -10,13 +10,13 @@ use std::io;
 
 /// A item we parse and translate.
 #[derive(Debug)]
-pub(crate) enum ItemKind {
+pub(crate) enum ItemKind<'tu> {
     /// A module, created implicitly once (the root module), or via C++
     /// namespaces.
     Module(Module),
 
     /// A type declared in any of the multiple ways it can be declared.
-    Type(Type),
+    Type(Type<'tu>),
 
     /// A function or method declaration.
     Function(Function),
@@ -25,7 +25,7 @@ pub(crate) enum ItemKind {
     Var(Var),
 }
 
-impl ItemKind {
+impl<'tu> ItemKind<'tu> {
     /// Get a reference to this `ItemKind`'s underying `Module`, or `None` if it
     /// is some other kind.
     pub(crate) fn as_module(&self) -> Option<&Module> {
@@ -72,7 +72,7 @@ impl ItemKind {
 
     /// Get a reference to this `ItemKind`'s underying `Type`, or `None` if
     /// it is some other kind.
-    pub(crate) fn as_type(&self) -> Option<&Type> {
+    pub(crate) fn as_type(&self) -> Option<&Type<'tu>> {
         match *self {
             ItemKind::Type(ref ty) => Some(ty),
             _ => None,
@@ -81,7 +81,7 @@ impl ItemKind {
 
     /// Get a mutable reference to this `ItemKind`'s underying `Type`, or `None`
     /// if it is some other kind.
-    pub(crate) fn as_type_mut(&mut self) -> Option<&mut Type> {
+    pub(crate) fn as_type_mut(&mut self) -> Option<&mut Type<'tu>> {
         match *self {
             ItemKind::Type(ref mut ty) => Some(ty),
             _ => None,
@@ -95,7 +95,7 @@ impl ItemKind {
 
     /// Get a reference to this `ItemKind`'s underying `Type`, or panic if it is
     /// some other kind.
-    pub(crate) fn expect_type(&self) -> &Type {
+    pub(crate) fn expect_type(&self) -> &Type<'tu> {
         self.as_type().expect("Not a type")
     }
 
@@ -114,7 +114,7 @@ impl ItemKind {
     }
 }
 
-impl DotAttributes for ItemKind {
+impl<'tu> DotAttributes for ItemKind<'tu> {
     fn dot_attributes<W>(
         &self,
         ctx: &BindgenContext,

@@ -1,6 +1,6 @@
 //! Intermediate representation of variables.
 
-use ::clang::EntityKind;
+use ::clang::{EntityKind, EntityVisitResult};
 
 use super::super::codegen::MacroTypeVariation;
 use super::context::{BindgenContext, TypeId};
@@ -10,7 +10,7 @@ use super::int::IntKind;
 use super::item::Item;
 use super::ty::{FloatKind, TypeKind};
 use crate::callbacks::{ItemInfo, ItemKind, MacroParsingBehavior};
-use crate::clang::{self, EntityExt};
+use crate::clang::{self, EntityExt, FileExt, SourceLocationExt, TypeExt};
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 
 use std::io;
@@ -168,29 +168,33 @@ fn handle_function_macro(
         t.get_kind() == ::clang::token::TokenKind::Punctuation &&
             t.get_spelling() == ")"
     };
-    let tokens: Vec<_> = cursor.tokens().iter().collect();
+    let tokens: Vec<_> = cursor.tokens();
     if let Some(boundary) = tokens.iter().position(is_closing_paren) {
         let mut spelled = tokens.iter().map(|t| t.get_spelling());
         // Add 1, to convert index to length.
         let left = spelled.by_ref().take(boundary + 1);
         let left = left.collect::<Vec<_>>().concat();
-        if let Ok(left) = String::from_utf8(left) {
-            let right: Vec<_> = spelled.collect();
-            callbacks.func_macro(&left, &right);
-        }
+        let spelled = spelled.collect::<Vec<_>>();
+        let right = {
+            let mut right = Vec::new();
+            for spelled in &spelled {
+                right.push(spelled.as_bytes());
+            }
+            right
+        };
+        callbacks.func_macro(&left, &right);
     }
 }
 
 impl ClangSubItemParser for Var {
     fn parse<'tu>(
         cursor: clang::Cursor<'tu>,
-        ctx: &mut BindgenContext,
+        ctx: &mut BindgenContext<'tu>,
     ) -> Result<ParseResult<'tu, Self>, ParseError> {
         use cexpr::expr::EvalResult;
         use cexpr::literal::CChar;
-        use clang_sys::*;
         match cursor.kind() {
-            CXCursor_MacroDefinition => {
+            EntityKind::MacroDefinition => {
                 for callbacks in &ctx.options().parse_callbacks {
                     match callbacks.will_parse_macro(&cursor.spelling()) {
                         MacroParsingBehavior::Ignore => {
@@ -200,7 +204,7 @@ impl ClangSubItemParser for Var {
                     }
 
                     if cursor.is_macro_function_like() {
-                        handle_function_macro(&cursor, callbacks.as_ref());
+                        handle_function_macro(cursor, callbacks.as_ref());
                         // We handled the macro, skip macro processing below.
                         return Err(ParseError::Continue);
                     }
@@ -284,7 +288,7 @@ impl ClangSubItemParser for Var {
             }
             EntityKind::VarDecl => {
                 let mut name = cursor.spelling();
-                if cursor.linkage() == CXLinkage_External {
+                if cursor.linkage() == Some(::clang::Linkage::External) {
                     if let Some(nm) = ctx.options().last_callback(|callbacks| {
                         callbacks.generated_name_override(ItemInfo {
                             name: name.as_str(),
@@ -309,21 +313,28 @@ impl ClangSubItemParser for Var {
                     })
                 });
 
-                let ty = cursor.cur_type();
+                let ty = cursor.cur_type().unwrap();
 
                 // TODO(emilio): do we have to special-case constant arrays in
                 // some other places?
                 let is_const = ty.is_const() ||
-                    ([CXType_ConstantArray, CXType_IncompleteArray]
-                        .contains(&ty.kind()) &&
+                    ([
+                        ::clang::TypeKind::ConstantArray,
+                        ::clang::TypeKind::IncompleteArray,
+                    ]
+                    .contains(&ty.kind()) &&
                         ty.elem_type()
                             .map_or(false, |element| element.is_const()));
 
-                let ty = match Item::from_ty(&ty, cursor, None, ctx) {
+                let ty = match Item::from_ty(ty, cursor, None, ctx) {
                     Ok(ty) => ty,
                     Err(e) => {
                         assert!(
-                            matches!(ty.kind(), CXType_Auto | CXType_Unexposed),
+                            matches!(
+                                ty.kind(),
+                                ::clang::TypeKind::Auto |
+                                    ::clang::TypeKind::Unexposed
+                            ),
                             "Couldn't resolve constant type, and it \
                              wasn't an nondeductible auto type or unexposed \
                              type!"
@@ -353,9 +364,10 @@ impl ClangSubItemParser for Var {
                         _ => unreachable!(),
                     };
 
-                    let mut val = cursor.evaluate().and_then(|v| v.as_int());
+                    let mut val =
+                        EntityExt::evaluate(cursor).and_then(|v| v.as_int());
                     if val.is_none() || !kind.signedness_matches(val.unwrap()) {
-                        val = get_integer_literal_from_cursor(&cursor);
+                        val = get_integer_literal_from_cursor(cursor);
                     }
 
                     val.map(|val| {
@@ -366,13 +378,11 @@ impl ClangSubItemParser for Var {
                         }
                     })
                 } else if is_float {
-                    cursor
-                        .evaluate()
+                    EntityExt::evaluate(cursor)
                         .and_then(|v| v.as_double())
                         .map(VarType::Float)
                 } else {
-                    cursor
-                        .evaluate()
+                    EntityExt::evaluate(cursor)
                         .and_then(|v| v.as_literal_string())
                         .map(VarType::String)
                 };
@@ -421,23 +431,22 @@ fn parse_int_literal_tokens(cursor: &clang::Cursor) -> Option<i64> {
     }
 }
 
-fn get_integer_literal_from_cursor(cursor: &clang::Cursor) -> Option<i64> {
-    use clang_sys::*;
+fn get_integer_literal_from_cursor(cursor: clang::Cursor<'_>) -> Option<i64> {
     let mut value = None;
     cursor.visit(|c| {
         match c.kind() {
-            CXCursor_IntegerLiteral | CXCursor_UnaryOperator => {
+            EntityKind::IntegerLiteral | EntityKind::UnaryOperator => {
                 value = parse_int_literal_tokens(&c);
             }
-            CXCursor_UnexposedExpr => {
-                value = get_integer_literal_from_cursor(&c);
+            EntityKind::UnexposedExpr => {
+                value = get_integer_literal_from_cursor(c);
             }
             _ => (),
         }
         if value.is_some() {
-            CXChildVisit_Break
+            EntityVisitResult::Break
         } else {
-            CXChildVisit_Continue
+            EntityVisitResult::Continue
         }
     });
     value
@@ -445,7 +454,7 @@ fn get_integer_literal_from_cursor(cursor: &clang::Cursor) -> Option<i64> {
 
 fn duplicated_macro_diagnostic(
     macro_name: &str,
-    _location: crate::clang::SourceLocation,
+    _location: Option<crate::clang::SourceLocation>,
     _ctx: &BindgenContext,
 ) {
     warn!("Duplicated macro definition: {}", macro_name);
@@ -471,12 +480,15 @@ fn duplicated_macro_diagnostic(
         let mut slice = Slice::default();
         let mut source = Cow::from(macro_name);
 
-        let (file, line, col, _) = _location.location();
-        if let Some(filename) = file.name() {
-            if let Ok(Some(code)) = get_line(&filename, line) {
-                source = code.into();
+        if let Some(location) = _location {
+            let (file, line, col, _) = location.location();
+            if let Some(file) = file {
+                let filename = file.name();
+                if let Ok(Some(code)) = get_line(&filename, line) {
+                    source = code.into();
+                }
+                slice.with_location(filename, line, col);
             }
-            slice.with_location(filename, line, col);
         }
 
         slice.with_source(source);

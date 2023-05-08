@@ -46,11 +46,11 @@ mod clang;
 mod diagnostics;
 mod features;
 mod ir;
-mod new_clang;
 mod parse;
 mod regex_set;
 
-use crate::clang::EntityExt;
+use crate::clang::{EntityExt, TranslationUnitExt};
+use crate::time::Timer;
 use ::clang::diagnostic::Severity;
 use ::clang::EntityVisitResult;
 pub use codegen::{
@@ -89,11 +89,12 @@ pub const DEFAULT_ANON_FIELDS_PREFIX: &str = "__bindgen_anon_";
 
 const DEFAULT_NON_EXTERN_FNS_SUFFIX: &str = "__extern";
 
-fn file_is_cpp(name_file: &str) -> bool {
-    name_file.ends_with(".hpp") ||
-        name_file.ends_with(".hxx") ||
-        name_file.ends_with(".hh") ||
-        name_file.ends_with(".h++")
+fn file_is_cpp<P: AsRef<Path>>(name_file: &P) -> bool {
+    name_file
+        .as_ref()
+        .extension()
+        .map(|ext| ["hpp", "hxx", "hh", "h++"].iter().any(|&e| e == ext))
+        .unwrap_or_default()
 }
 
 fn args_are_cpp(clang_args: &[String]) -> bool {
@@ -327,14 +328,16 @@ impl Builder {
             self.options.input_headers
                 [..self.options.input_headers.len().saturating_sub(1)]
                 .iter()
-                .flat_map(|header| ["-include".into(), header.to_string()]),
+                .flat_map(|header| {
+                    ["-include".into(), header.display().to_string()]
+                }),
         );
 
         let input_unsaved_files =
             std::mem::take(&mut self.options.input_header_contents)
                 .into_iter()
                 .map(|(name, contents)| {
-                    (clang::UnsavedFile::new(name, contents), name)
+                    (clang::UnsavedFile::new(&name, contents), name)
                 })
                 .collect::<Vec<_>>();
 
@@ -367,7 +370,7 @@ impl Builder {
             is_cpp |= file_is_cpp(header);
 
             wrapper_contents.push_str("#include \"");
-            wrapper_contents.push_str(header);
+            wrapper_contents.push_str(&header.display().to_string());
             wrapper_contents.push_str("\"\n");
         }
 
@@ -377,7 +380,7 @@ impl Builder {
             is_cpp |= file_is_cpp(name);
 
             wrapper_contents.push_str("#line 0 \"");
-            wrapper_contents.push_str(name);
+            wrapper_contents.push_str(&name.display().to_string());
             wrapper_contents.push_str("\"\n");
             wrapper_contents.push_str(contents);
         }
@@ -723,7 +726,7 @@ impl Bindings {
     /// Generate bindings for the given options.
     pub(crate) fn generate(
         mut options: BindgenOptions,
-        input_unsaved_files: Vec<(clang::UnsavedFile, String)>,
+        input_unsaved_files: Vec<(clang::UnsavedFile, PathBuf)>,
     ) -> Result<Bindings, BindgenError> {
         ensure_libclang_is_loaded();
 
@@ -852,24 +855,53 @@ impl Bindings {
                         path.into(),
                     ));
                 }
-                let h = h.clone();
+                let h = h.display().to_string();
                 options.clang_args.push(h);
             } else {
                 return Err(BindgenError::NotExist(path.into()));
             }
         }
 
-        for (idx, (f, name)) in input_unsaved_files.iter().enumerate() {
+        for (idx, (_, name)) in input_unsaved_files.iter().enumerate() {
             if idx != 0 || !options.input_headers.is_empty() {
                 options.clang_args.push("-include".to_owned());
             }
-            options.clang_args.push(name.to_owned())
+            options.clang_args.push(name.display().to_string())
         }
 
         debug!("Fixed-up options: {:?}", options);
 
         let time_phases = options.time_phases;
-        let mut context = BindgenContext::new(options, &input_unsaved_files);
+        let clang = ::clang::Clang::new().unwrap();
+
+        // TODO(emilio): Use the CXTargetInfo here when available.
+        //
+        // see: https://reviews.llvm.org/D32389
+        let index = clang::Index::new(&clang, false, true);
+
+        let translation_unit = {
+            let _t =
+                Timer::new("translation_unit").with_output(options.time_phases);
+
+            clang::TranslationUnit::parse(
+                &index,
+                "",
+                &options.clang_args,
+                &input_unsaved_files
+                    .iter()
+                    .map(|(unsaved, _)| unsaved.clone())
+                    .collect::<Vec<_>>(),
+                true,
+            ).expect("libclang error; possible causes include:
+- Invalid flag syntax
+- Unrecognized flags
+- Invalid flag arguments
+- File I/O errors
+- Host vs. target architecture mismatch
+If you encounter an error missing from this list, please file an issue or a PR!")
+        };
+
+        let mut context = BindgenContext::new(&translation_unit, options);
 
         if is_host_build {
             debug_assert_eq!(
@@ -1073,9 +1105,9 @@ fn filter_builtins(ctx: &BindgenContext, cursor: &clang::Cursor) -> bool {
 }
 
 /// Parse one `Item` from the Clang cursor.
-fn parse_one(
-    ctx: &mut BindgenContext,
-    cursor: clang::Cursor,
+fn parse_one<'tu>(
+    ctx: &mut BindgenContext<'tu>,
+    cursor: clang::Cursor<'tu>,
     parent: Option<ItemId>,
 ) -> ::clang::EntityVisitResult {
     if !filter_builtins(ctx, &cursor) {
@@ -1093,7 +1125,9 @@ fn parse_one(
 }
 
 /// Parse the Clang AST into our `Item` internal representation.
-fn parse(context: &mut BindgenContext) -> Result<(), BindgenError> {
+fn parse<'tu>(
+    context: &mut BindgenContext<'tu>,
+) -> Result<(), BindgenError> {
     let mut error = None;
     for d in context.translation_unit().get_diagnostics().iter() {
         let msg = d.get_text();
@@ -1114,7 +1148,9 @@ fn parse(context: &mut BindgenContext) -> Result<(), BindgenError> {
     let cursor = context.translation_unit().get_entity();
 
     if context.options().emit_ast {
-        fn dump_if_not_builtin(cur: clang::Cursor) -> EntityVisitResult {
+        fn dump_if_not_builtin<'tu>(
+            cur: clang::Cursor<'tu>,
+        ) -> EntityVisitResult {
             if !cur.is_builtin() {
                 clang::ast_dump(cur, 0)
             } else {

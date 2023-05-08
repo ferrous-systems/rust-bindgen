@@ -19,12 +19,14 @@ use super::module::{Module, ModuleKind};
 use super::template::{TemplateInstantiation, TemplateParameters};
 use super::traversal::{self, Edge, ItemTraversal};
 use super::ty::{FloatKind, Type, TypeKind};
-use crate::clang::{self, Cursor, TranslationUnitExt, TypeExt};
+use crate::clang::{
+    self, Cursor, EntityExt, FileExt, SourceLocationExt, TypeExt,
+};
 use crate::codegen::CodegenError;
 use crate::BindgenOptions;
 use crate::{Entry, HashMap, HashSet};
 
-use ::clang::Clang;
+use ::clang::{EntityKind, EntityVisitResult};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 use std::borrow::Cow;
@@ -302,27 +304,27 @@ where
 /// in which case clang may generate the same USR for multiple nested unnamed
 /// types.
 #[derive(Eq, PartialEq, Hash, Debug)]
-enum TypeKey {
+enum TypeKey<'tu> {
     Usr(String),
-    Declaration(Cursor),
+    Declaration(Cursor<'tu>),
 }
 
 /// A context used during parsing and generation of structs.
 #[derive(Debug)]
-pub(crate) struct BindgenContext {
+pub(crate) struct BindgenContext<'tu> {
     /// The map of all the items parsed so far, keyed off ItemId.
-    items: Vec<Option<Item>>,
+    items: Vec<Option<Item<'tu>>>,
 
     /// Clang USR to type map. This is needed to be able to associate types with
     /// item ids during parsing.
-    types: HashMap<TypeKey, TypeId>,
+    types: HashMap<TypeKey<'tu>, TypeId>,
 
     /// Maps from a cursor to the item ID of the named template type parameter
     /// for that cursor.
-    type_params: HashMap<clang::Cursor, TypeId>,
+    type_params: HashMap<Cursor<'tu>, TypeId>,
 
     /// A cursor to module map. Similar reason than above.
-    modules: HashMap<Cursor, ModuleId>,
+    modules: HashMap<Cursor<'tu>, ModuleId>,
 
     /// The root module, this is guaranteed to be an item of kind Module.
     root_module: ModuleId,
@@ -336,7 +338,7 @@ pub(crate) struct BindgenContext {
     /// This is used to handle the cases where the semantic and the lexical
     /// parents of the cursor differ, like when a nested class is defined
     /// outside of the parent class.
-    semantic_parents: HashMap<clang::Cursor, ItemId>,
+    semantic_parents: HashMap<Cursor<'tu>, ItemId>,
 
     /// A stack with the current type declarations and types we're parsing. This
     /// is needed to avoid infinite recursion when parsing a type like:
@@ -349,7 +351,7 @@ pub(crate) struct BindgenContext {
     /// We could also use the `types` HashMap, but my intention with it is that
     /// only valid types and declarations end up there, and this could
     /// potentially break that assumption.
-    currently_parsed_types: Vec<PartialType>,
+    currently_parsed_types: Vec<PartialType<'tu>>,
 
     /// A map with all the already parsed macro names. This is done to avoid
     /// hard errors while parsing duplicated macros, as well to allow macro
@@ -369,7 +371,7 @@ pub(crate) struct BindgenContext {
     in_codegen: bool,
 
     /// The translation unit for parsing.
-    translation_unit: clang::TranslationUnit,
+    translation_unit: &'tu clang::TranslationUnit<'tu>,
 
     /// Target information that can be useful for some stuff.
     target_info: clang::TargetInfo,
@@ -483,7 +485,7 @@ pub(crate) struct BindgenContext {
 
 /// A traversal of allowlisted items.
 struct AllowlistedItemsTraversal<'ctx> {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
     traversal: ItemTraversal<'ctx, ItemSet, Vec<ItemId>>,
 }
 
@@ -520,37 +522,13 @@ impl<'ctx> AllowlistedItemsTraversal<'ctx> {
     }
 }
 
-impl BindgenContext {
+impl<'tu> BindgenContext<'tu> {
     /// Construct the context for the given `options`.
     pub(crate) fn new(
+        translation_unit: &'tu ::clang::TranslationUnit<'tu>,
         options: BindgenOptions,
-        input_unsaved_files: &[clang::UnsavedFile],
     ) -> Self {
-        // TODO(emilio): Use the CXTargetInfo here when available.
-        //
-        // see: https://reviews.llvm.org/D32389
-        let index = clang::Index::new(&Clang::new().unwrap(), false, true);
-
-        let translation_unit = {
-            let _t =
-                Timer::new("translation_unit").with_output(options.time_phases);
-
-            clang::TranslationUnit::parse(
-                &index,
-                "",
-                &options.clang_args,
-                input_unsaved_files,
-                true,
-            ).expect("libclang error; possible causes include:
-- Invalid flag syntax
-- Unrecognized flags
-- Invalid flag arguments
-- File I/O errors
-- Host vs. target architecture mismatch
-If you encounter an error missing from this list, please file an issue or a PR!")
-        };
-
-        let target_info = translation_unit.get_target(); 
+        let target_info = translation_unit.get_target();
         let root_module = Self::build_root_module(ItemId(0));
         let root_module_id = root_module.id().as_module_id_unchecked();
 
@@ -614,14 +592,14 @@ If you encounter an error missing from this list, please file an issue or a PR!"
 
     /// Get the stack of partially parsed types that we are in the middle of
     /// parsing.
-    pub(crate) fn currently_parsed_types(&self) -> &[PartialType] {
+    pub(crate) fn currently_parsed_types(&self) -> &[PartialType<'tu>] {
         &self.currently_parsed_types[..]
     }
 
     /// Begin parsing the given partial type, and push it onto the
     /// `currently_parsed_types` stack so that we won't infinite recurse if we
     /// run into a reference to it while parsing it.
-    pub(crate) fn begin_parsing(&mut self, partial_ty: PartialType) {
+    pub(crate) fn begin_parsing(&mut self, partial_ty: PartialType<'tu>) {
         self.currently_parsed_types.push(partial_ty);
     }
 
@@ -652,9 +630,9 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// internal types set.
     pub(crate) fn add_item(
         &mut self,
-        item: Item,
-        declaration: Option<Cursor>,
-        location: Option<Cursor>,
+        item: Item<'tu>,
+        declaration: Option<Cursor<'tu>>,
+        location: Option<Cursor<'tu>>,
     ) {
         debug!(
             "BindgenContext::add_item({:?}, declaration: {:?}, loc: {:?}",
@@ -777,8 +755,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// Add a new named template type parameter to this context's item set.
     pub(crate) fn add_type_param(
         &mut self,
-        item: Item,
-        definition: clang::Cursor,
+        item: Item<'tu>,
+        definition: clang::Cursor<'tu>,
     ) {
         debug!(
             "BindgenContext::add_type_param: item = {:?}; definition = {:?}",
@@ -789,10 +767,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             item.expect_type().is_type_param(),
             "Should directly be a named type, not a resolved reference or anything"
         );
-        assert_eq!(
-            definition.kind(),
-            clang_sys::CXCursor_TemplateTypeParameter
-        );
+        assert_eq!(definition.kind(), EntityKind::TemplateTypeParameter);
 
         self.add_item_to_module(&item);
 
@@ -818,10 +793,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         &self,
         definition: &clang::Cursor,
     ) -> Option<TypeId> {
-        assert_eq!(
-            definition.kind(),
-            clang_sys::CXCursor_TemplateTypeParameter
-        );
+        assert_eq!(definition.kind(), EntityKind::TemplateTypeParameter);
         self.type_params.get(definition).cloned()
     }
 
@@ -876,7 +848,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     }
 
     /// Iterate over all items that have been defined.
-    pub(crate) fn items(&self) -> impl Iterator<Item = (ItemId, &Item)> {
+    pub(crate) fn items(&self) -> impl Iterator<Item = (ItemId, &Item<'tu>)> {
         self.items.iter().enumerate().filter_map(|(index, item)| {
             let item = item.as_ref()?;
             Some((ItemId(index), item))
@@ -891,7 +863,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// Gather all the unresolved type references.
     fn collect_typerefs(
         &mut self,
-    ) -> Vec<(ItemId, clang::Type, clang::Cursor, Option<ItemId>)> {
+    ) -> Vec<(ItemId, clang::Type<'tu>, clang::Cursor<'tu>, Option<ItemId>)>
+    {
         debug_assert!(!self.collected_typerefs);
         self.collected_typerefs = true;
         let mut typerefs = vec![];
@@ -903,10 +876,9 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                 None => continue,
             };
 
-            if let TypeKind::UnresolvedTypeRef(ref ty, loc, parent_id) =
-                *ty.kind()
+            if let TypeKind::UnresolvedTypeRef(ty, loc, parent_id) = *ty.kind()
             {
-                typerefs.push((id, *ty, loc, parent_id));
+                typerefs.push((id, ty, loc, parent_id));
             };
         }
         typerefs
@@ -921,11 +893,11 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         for (id, ty, loc, parent_id) in typerefs {
             let _resolved =
                 {
-                    let resolved = Item::from_ty(&ty, loc, parent_id, self)
+                    let resolved = Item::from_ty(ty, loc, parent_id, self)
                     .unwrap_or_else(|_| {
                         warn!("Could not resolve type reference, falling back \
                                to opaque blob");
-                        Item::new_opaque_type(self.next_item_id(), &ty, self)
+                        Item::new_opaque_type(self.next_item_id(), ty, self)
                     });
 
                     let item = self.items[id.0].as_mut().unwrap();
@@ -1413,7 +1385,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     //
     // If at some point we care about the memory here, probably a map TypeKind
     // -> builtin type ItemId would be the best to improve that.
-    fn add_builtin_item(&mut self, item: Item) {
+    fn add_builtin_item(&mut self, item: Item<'tu>) {
         debug!("add_builtin_item: item = {:?}", item);
         debug_assert!(item.kind().is_type());
         self.add_item_to_module(&item);
@@ -1422,7 +1394,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         assert!(old_item.is_none(), "Inserted type twice?");
     }
 
-    fn build_root_module(id: ItemId) -> Item {
+    fn build_root_module(id: ItemId) -> Item<'tu> {
         let module = Module::new(Some("root".into()), ModuleKind::Normal);
         Item::new(id, None, None, id, ItemKind::Module(module), None)
     }
@@ -1452,24 +1424,30 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// the given ID.
     ///
     /// Panics if the ID resolves to an item that is not a type.
-    pub(crate) fn safe_resolve_type(&self, type_id: TypeId) -> Option<&Type> {
+    pub(crate) fn safe_resolve_type<'a>(
+        &'tu self,
+        type_id: TypeId,
+    ) -> Option<&'tu Type<'tu>> {
         self.resolve_item_fallible(type_id)
             .map(|t| t.kind().expect_type())
     }
 
     /// Resolve the given `ItemId` into an `Item`, or `None` if no such item
     /// exists.
-    pub(crate) fn resolve_item_fallible<Id: Into<ItemId>>(
-        &self,
+    pub(crate) fn resolve_item_fallible<'a, Id: Into<ItemId>>(
+        &'tu self,
         id: Id,
-    ) -> Option<&Item> {
+    ) -> Option<&'tu Item<'tu>> {
         self.items.get(id.into().0)?.as_ref()
     }
 
     /// Resolve the given `ItemId` into an `Item`.
     ///
     /// Panics if the given ID does not resolve to any item.
-    pub(crate) fn resolve_item<Id: Into<ItemId>>(&self, item_id: Id) -> &Item {
+    pub(crate) fn resolve_item<Id: Into<ItemId>>(
+        &'tu self,
+        item_id: Id,
+    ) -> &'tu Item<'tu> {
         let item_id = item_id.into();
         match self.resolve_item_fallible(item_id) {
             Some(item) => item,
@@ -1492,7 +1470,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// not sure it's worth it.
     pub(crate) fn add_semantic_parent(
         &mut self,
-        definition: clang::Cursor,
+        definition: clang::Cursor<'tu>,
         parent_id: ItemId,
     ) {
         self.semantic_parents.insert(definition, parent_id);
@@ -1501,7 +1479,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// Returns a known semantic parent for a given definition.
     pub(crate) fn known_semantic_parent(
         &self,
-        definition: clang::Cursor,
+        definition: clang::Cursor<'tu>,
     ) -> Option<ItemId> {
         self.semantic_parents.get(&definition).cloned()
     }
@@ -1515,10 +1493,11 @@ If you encounter an error missing from this list, please file an issue or a PR!"
     /// middle of parsing.
     fn get_declaration_info_for_template_instantiation(
         &self,
-        instantiation: &Cursor,
-    ) -> Option<(Cursor, ItemId, usize)> {
+        instantiation: Cursor<'tu>,
+    ) -> Option<(Cursor<'tu>, ItemId, usize)> {
         instantiation
             .cur_type()
+            .unwrap()
             .canonical_declaration(Some(instantiation))
             .and_then(|canon_decl| {
                 self.get_resolved_type(&canon_decl).and_then(
@@ -1529,7 +1508,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                             None
                         } else {
                             Some((
-                                *canon_decl.cursor(),
+                                canon_decl.cursor(),
                                 template_decl_id.into(),
                                 num_params,
                             ))
@@ -1550,7 +1529,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                     .and_then(|referenced| {
                         self.currently_parsed_types()
                             .iter()
-                            .find(|partial_ty| *partial_ty.decl() == referenced)
+                            .find(|partial_ty| partial_ty.decl() == referenced)
                             .cloned()
                     })
                     .and_then(|template_decl| {
@@ -1560,7 +1539,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                             None
                         } else {
                             Some((
-                                *template_decl.decl(),
+                                template_decl.decl(),
                                 template_decl.id(),
                                 num_template_params,
                             ))
@@ -1606,8 +1585,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         &mut self,
         with_id: ItemId,
         template: TypeId,
-        ty: &clang::Type,
-        location: clang::Cursor,
+        ty: clang::Type<'tu>,
+        location: clang::Cursor<'tu>,
     ) -> Option<TypeId> {
         let num_expected_args =
             self.resolve_type(template).num_self_template_params(self);
@@ -1636,23 +1615,23 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             // on accident.
             let idx = children
                 .iter()
-                .position(|c| c.kind() == clang_sys::CXCursor_TemplateRef);
+                .position(|c| c.kind() == EntityKind::TemplateRef);
             if let Some(idx) = idx {
                 if children
                     .iter()
                     .take(idx)
-                    .all(|c| c.kind() == clang_sys::CXCursor_NamespaceRef)
+                    .all(|c| c.kind() == EntityKind::NamespaceRef)
                 {
                     children = children.into_iter().skip(idx + 1).collect();
                 }
             }
         }
 
-        for child in children.iter().rev() {
+        for &child in children.iter().rev() {
             match child.kind() {
-                clang_sys::CXCursor_TypeRef |
-                clang_sys::CXCursor_TypedefDecl |
-                clang_sys::CXCursor_TypeAliasDecl => {
+                EntityKind::TypeRef |
+                EntityKind::TypedefDecl |
+                EntityKind::TypeAliasDecl => {
                     // The `with_id` ID will potentially end up unused if we give up
                     // on this type (for example, because it has const value
                     // template args), so if we pass `with_id` as the parent, it is
@@ -1660,14 +1639,14 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                     // template declaration as the parent. It is already parsed and
                     // has a known-resolvable `ItemId`.
                     let ty = Item::from_ty_or_ref(
-                        child.cur_type(),
-                        *child,
+                        child.cur_type().unwrap(),
+                        child,
                         Some(template.into()),
                         self,
                     );
                     args.push(ty);
                 }
-                clang_sys::CXCursor_TemplateRef => {
+                EntityKind::TemplateRef => {
                     let (
                         template_decl_cursor,
                         template_decl_id,
@@ -1684,8 +1663,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                         // Do a happy little parse. See comment in the TypeRef
                         // match arm about parent IDs.
                         let ty = Item::from_ty_or_ref(
-                            child.cur_type(),
-                            *child,
+                            child.cur_type().unwrap(),
+                            child,
                             Some(template.into()),
                             self,
                         );
@@ -1722,6 +1701,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                             sub_name,
                             template_decl_cursor
                                 .cur_type()
+                                .unwrap()
                                 .fallible_layout(self)
                                 .ok(),
                             sub_kind,
@@ -1734,7 +1714,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                             None,
                             self.current_module.into(),
                             ItemKind::Type(sub_ty),
-                            Some(child.location()),
+                            child.location(),
                         );
 
                         // Bypass all the validations in add_item explicitly.
@@ -1799,7 +1779,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             None,
             self.current_module.into(),
             ItemKind::Type(ty),
-            Some(location.location()),
+            location.location(),
         );
 
         // Bypass all the validations in add_item explicitly.
@@ -1817,7 +1797,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         decl: &clang::CanonicalTypeDeclaration,
     ) -> Option<TypeId> {
         self.types
-            .get(&TypeKey::Declaration(*decl.cursor()))
+            .get(&TypeKey::Declaration(decl.cursor()))
             .or_else(|| {
                 decl.cursor()
                     .usr()
@@ -1832,16 +1812,15 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         &mut self,
         with_id: ItemId,
         parent_id: Option<ItemId>,
-        ty: clang::Type<'_>,
-        location: Option<clang::Cursor<'_>>,
+        ty: Option<clang::Type<'tu>>,
+        location: Option<clang::Cursor<'tu>>,
     ) -> Option<TypeId> {
-        use clang_sys::{CXCursor_TypeAliasTemplateDecl, CXCursor_TypeRef};
         debug!(
             "builtin_or_resolved_ty: {:?}, {:?}, {:?}, {:?}",
             ty, location, with_id, parent_id
         );
 
-        if let Some(decl) = ty.canonical_declaration(location.as_ref()) {
+        if let Some(decl) = ty.canonical_declaration(location) {
             if let Some(id) = self.get_resolved_type(&decl) {
                 debug!(
                     "Already resolved ty {:?}, {:?}, {:?} {:?}",
@@ -1856,7 +1835,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                 //     there's nothing left to do.
                 if let Some(location) = location {
                     if decl.cursor().is_template_like() &&
-                        *ty != decl.cursor().cur_type()
+                        Some(ty) != decl.cursor().cur_type()
                     {
                         // For specialized type aliases, there's no way to get the
                         // template parameters as of this writing (for a struct
@@ -1869,8 +1848,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                         //
                         // This is _tricky_, I know :(
                         if decl.cursor().kind() ==
-                            CXCursor_TypeAliasTemplateDecl &&
-                            !location.contains_cursor(CXCursor_TypeRef) &&
+                            EntityKind::TypeAliasTemplateDecl &&
+                            !location.contains_cursor(EntityKind::TypeRef) &&
                             ty.canonical_type().is_valid_and_exposed()
                         {
                             return None;
@@ -1903,7 +1882,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: clang::Type<'_>,
+        ty: clang::Type<'tu>,
     ) -> TypeId {
         self.build_wrapper(with_id, wrapped_id, parent_id, ty, ty.is_const())
     }
@@ -1916,7 +1895,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: clang::Type<'_>,
+        ty: clang::Type<'tu>,
     ) -> TypeId {
         self.build_wrapper(
             with_id, wrapped_id, parent_id, ty, /* is_const = */ true,
@@ -1928,12 +1907,12 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         with_id: ItemId,
         wrapped_id: TypeId,
         parent_id: Option<ItemId>,
-        ty: clang::Type<'_>,
+        ty: clang::Type<'tu>,
         is_const: bool,
     ) -> TypeId {
         let spelling = ty.spelling();
         let layout = ty.fallible_layout(self).ok();
-        let location = ty.declaration().location();
+        let location = ty.declaration().and_then(|decl| decl.location());
         let type_kind = TypeKind::ResolvedTypeRef(wrapped_id);
         let ty = Type::new(Some(spelling), layout, type_kind, is_const);
         let item = Item::new(
@@ -1942,7 +1921,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             None,
             parent_id.unwrap_or_else(|| self.current_module.into()),
             ItemKind::Type(ty),
-            Some(location),
+            location,
         );
         self.add_builtin_item(item);
         with_id.as_type_id_unchecked()
@@ -1955,9 +1934,9 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         ret
     }
 
-    fn build_builtin_ty(&mut self, ty: clang::Type<'_>) -> Option<TypeId> {
+    fn build_builtin_ty(&mut self, ty: clang::Type<'tu>) -> Option<TypeId> {
         let type_kind = match ty.kind() {
-            ::clang::TypeKind::NullPtr => TypeKind::NullPtr,
+            ::clang::TypeKind::Nullptr => TypeKind::NullPtr,
             ::clang::TypeKind::Void => TypeKind::Void,
             ::clang::TypeKind::Bool => TypeKind::Int(IntKind::Bool),
             ::clang::TypeKind::Int => TypeKind::Int(IntKind::Int),
@@ -2008,7 +1987,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         let spelling = ty.spelling();
         let is_const = ty.is_const();
         let layout = ty.fallible_layout(self).ok();
-        let location = ty.declaration().location();
+        let location = ty.declaration().and_then(|decl| decl.location());
         let ty = Type::new(Some(spelling), layout, type_kind, is_const);
         let id = self.next_item_id();
         let item = Item::new(
@@ -2017,14 +1996,14 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             None,
             self.root_module.into(),
             ItemKind::Type(ty),
-            Some(location),
+            location,
         );
         self.add_builtin_item(item);
         Some(id.as_type_id_unchecked())
     }
 
     /// Get the current Clang translation unit that is being processed.
-    pub(crate) fn translation_unit(&self) -> &clang::TranslationUnit {
+    pub(crate) fn translation_unit(&self) -> &'tu clang::TranslationUnit<'tu> {
         &self.translation_unit
     }
 
@@ -2112,11 +2091,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         &self,
         cursor: &clang::Cursor,
     ) -> (Option<String>, ModuleKind) {
-        assert_eq!(
-            cursor.kind(),
-            ::clang_sys::CXCursor_Namespace,
-            "Be a nice person"
-        );
+        assert_eq!(cursor.kind(), EntityKind::Namespace, "Be a nice person");
 
         let mut module_name = None;
         let spelling = cursor.spelling();
@@ -2127,8 +2102,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
         let mut kind = ModuleKind::Normal;
         let mut looking_for_name = false;
         for token in cursor.tokens().iter() {
-            match token.spelling() {
-                b"inline" => {
+            match token.get_spelling().as_str() {
+                "inline" => {
                     debug_assert!(
                         kind != ModuleKind::Inline,
                         "Multiple inline keywords?"
@@ -2145,10 +2120,10 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                 // but the tokenization of the second begins with the double
                 // colon. That's ok, so we only need to handle the weird
                 // tokenization here.
-                b"namespace" | b"::" => {
+                "namespace" | "::" => {
                     looking_for_name = true;
                 }
-                b"{" => {
+                "{" => {
                     // This should be an anonymous namespace.
                     assert!(looking_for_name);
                     break;
@@ -2156,9 +2131,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                 name => {
                     if looking_for_name {
                         if module_name.is_none() {
-                            module_name = Some(
-                                String::from_utf8_lossy(name).into_owned(),
-                            );
+                            module_name = Some(name.to_owned());
                         }
                         break;
                     } else {
@@ -2173,7 +2146,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                         // See also https://github.com/rust-lang/rust-bindgen/issues/1676.
                         warn!(
                             "Ignored unknown namespace prefix '{}' at {:?} in {:?}",
-                            String::from_utf8_lossy(name),
+                            name,
                             token,
                             cursor
                         );
@@ -2187,9 +2160,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
 
     /// Given a CXCursor_Namespace cursor, return the item ID of the
     /// corresponding module, or create one on the fly.
-    pub(crate) fn module(&mut self, cursor: clang::Cursor) -> ModuleId {
-        use clang_sys::*;
-        assert_eq!(cursor.kind(), CXCursor_Namespace, "Be a nice person");
+    pub(crate) fn module(&mut self, cursor: clang::Cursor<'tu>) -> ModuleId {
+        assert_eq!(cursor.kind(), EntityKind::Namespace, "Be a nice person");
         let cursor = cursor.canonical();
         if let Some(id) = self.modules.get(&cursor) {
             return *id;
@@ -2205,7 +2177,7 @@ If you encounter an error missing from this list, please file an issue or a PR!"
             None,
             self.current_module.into(),
             ItemKind::Module(module),
-            Some(cursor.location()),
+            cursor.location(),
         );
 
         let module_id = module.id().as_module_id_unchecked();
@@ -2337,7 +2309,8 @@ If you encounter an error missing from this list, please file an issue or a PR!"
                     if !self.options().allowlisted_files.is_empty() {
                         if let Some(location) = item.location() {
                             let (file, _, _, _) = location.location();
-                            if let Some(filename) = file.name() {
+                            if let Some(file) = file {
+                                let filename = file.name();
                                 if self
                                     .options()
                                     .allowlisted_files
@@ -2868,7 +2841,10 @@ impl ItemResolver {
     }
 
     /// Finish configuring and perform the actual item resolution.
-    pub(crate) fn resolve(self, ctx: &BindgenContext) -> &Item {
+    pub(crate) fn resolve<'tu>(
+        self,
+        ctx: &'tu BindgenContext<'tu>,
+    ) -> &'tu Item<'tu> {
         assert!(ctx.collected_typerefs());
 
         let mut id = self.id;
@@ -2905,23 +2881,23 @@ impl ItemResolver {
 
 /// A type that we are in the middle of parsing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PartialType {
-    decl: Cursor,
+pub(crate) struct PartialType<'tu> {
+    decl: Cursor<'tu>,
     // Just an ItemId, and not a TypeId, because we haven't finished this type
     // yet, so there's still time for things to go wrong.
     id: ItemId,
 }
 
-impl PartialType {
+impl<'tu> PartialType<'tu> {
     /// Construct a new `PartialType`.
-    pub(crate) fn new(decl: Cursor, id: ItemId) -> PartialType {
+    pub(crate) fn new(decl: Cursor<'tu>, id: ItemId) -> PartialType {
         // assert!(decl == decl.canonical());
         PartialType { decl, id }
     }
 
     /// The cursor pointing to this partial type's declaration location.
-    pub(crate) fn decl(&self) -> &Cursor {
-        &self.decl
+    pub(crate) fn decl(&self) -> Cursor<'tu> {
+        self.decl
     }
 
     /// The item ID allocated for this type. This is *NOT* a key for an entry in
@@ -2931,31 +2907,31 @@ impl PartialType {
     }
 }
 
-impl TemplateParameters for PartialType {
-    fn self_template_params(&self, _ctx: &BindgenContext) -> Vec<TypeId> {
+impl<'tu> TemplateParameters for PartialType<'tu> {
+    fn self_template_params(&self, _ctx: &BindgenContext<'_>) -> Vec<TypeId> {
         // Maybe at some point we will eagerly parse named types, but for now we
         // don't and this information is unavailable.
         vec![]
     }
 
-    fn num_self_template_params(&self, _ctx: &BindgenContext) -> usize {
+    fn num_self_template_params(&self, _ctx: &BindgenContext<'_>) -> usize {
         // Wouldn't it be nice if libclang would reliably give us this
         // information‽
         match self.decl().kind() {
-            clang_sys::CXCursor_ClassTemplate |
-            clang_sys::CXCursor_FunctionTemplate |
-            clang_sys::CXCursor_TypeAliasTemplateDecl => {
+            EntityKind::ClassTemplate |
+            EntityKind::FunctionTemplate |
+            EntityKind::TypeAliasTemplateDecl => {
                 let mut num_params = 0;
                 self.decl().visit(|c| {
                     match c.kind() {
-                        clang_sys::CXCursor_TemplateTypeParameter |
-                        clang_sys::CXCursor_TemplateTemplateParameter |
-                        clang_sys::CXCursor_NonTypeTemplateParameter => {
+                        EntityKind::TemplateTypeParameter |
+                        EntityKind::TemplateTemplateParameter |
+                        EntityKind::NonTypeTemplateParameter => {
                             num_params += 1;
                         }
                         _ => {}
                     };
-                    clang_sys::CXChildVisit_Continue
+                    EntityVisitResult::Continue
                 });
                 num_params
             }

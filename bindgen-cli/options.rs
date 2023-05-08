@@ -539,7 +539,7 @@ where
     let mut builder = builder();
 
     if let Some(header) = header {
-        builder = builder.header(header);
+        builder = builder.header(&header);
     } else {
         return Err(Error::new(ErrorKind::Other, "Header not found"));
     }
@@ -830,7 +830,7 @@ where
     }
 
     for arg in clang_args {
-        builder = builder.clang_arg(arg);
+        builder = builder.clang_arg(&arg);
     }
 
     let output = if let Some(path) = &output {

@@ -5,16 +5,8 @@ use super::function::FunctionSig;
 use super::item::Item;
 use super::traversal::{Trace, Tracer};
 use super::ty::TypeKind;
-use crate::clang;
-use clang_sys::CXChildVisit_Continue;
-use clang_sys::CXCursor_ObjCCategoryDecl;
-use clang_sys::CXCursor_ObjCClassMethodDecl;
-use clang_sys::CXCursor_ObjCClassRef;
-use clang_sys::CXCursor_ObjCInstanceMethodDecl;
-use clang_sys::CXCursor_ObjCProtocolDecl;
-use clang_sys::CXCursor_ObjCProtocolRef;
-use clang_sys::CXCursor_ObjCSuperClassRef;
-use clang_sys::CXCursor_TemplateTypeParameter;
+use crate::clang::{self, EntityExt};
+use ::clang::{EntityKind, EntityVisitResult};
 use proc_macro2::{Ident, Span, TokenStream};
 
 /// Objective C interface as used in TypeKind
@@ -121,28 +113,28 @@ impl ObjCInterface {
     }
 
     /// Parses the Objective C interface from the cursor
-    pub(crate) fn from_ty(
-        cursor: &clang::Cursor,
-        ctx: &mut BindgenContext,
+    pub(crate) fn from_ty<'tu>(
+        cursor: &clang::Cursor<'tu>,
+        ctx: &mut BindgenContext<'tu>,
     ) -> Option<Self> {
         let name = cursor.spelling();
         let mut interface = Self::new(&name);
 
-        if cursor.kind() == CXCursor_ObjCProtocolDecl {
+        if cursor.kind() == EntityKind::ObjCProtocolDecl {
             interface.is_protocol = true;
         }
 
         cursor.visit(|c| {
             match c.kind() {
-                CXCursor_ObjCClassRef => {
-                    if cursor.kind() == CXCursor_ObjCCategoryDecl {
+                EntityKind::ObjCClassRef => {
+                    if cursor.kind() == EntityKind::ObjCCategoryDecl {
                         // We are actually a category extension, and we found the reference
                         // to the original interface, so name this interface approriately
                         interface.name = c.spelling();
                         interface.category = Some(cursor.spelling());
                     }
                 }
-                CXCursor_ObjCProtocolRef => {
+                EntityKind::ObjCProtocolRef => {
                     // Gather protocols this interface conforms to
                     let needle = format!("P{}", c.spelling());
                     let items_map = ctx.items();
@@ -175,29 +167,34 @@ impl ObjCInterface {
                         }
                     }
                 }
-                CXCursor_ObjCInstanceMethodDecl |
-                CXCursor_ObjCClassMethodDecl => {
+                EntityKind::ObjCInstanceMethodDecl |
+                EntityKind::ObjCClassMethodDecl => {
                     let name = c.spelling();
                     let signature =
-                        FunctionSig::from_ty(&c.cur_type(), &c, ctx)
+                        FunctionSig::from_ty(c.cur_type().unwrap(), c, ctx)
                             .expect("Invalid function sig");
                     let is_class_method =
-                        c.kind() == CXCursor_ObjCClassMethodDecl;
+                        c.kind() == EntityKind::ObjCClassMethodDecl;
                     let method =
                         ObjCMethod::new(&name, signature, is_class_method);
                     interface.add_method(method);
                 }
-                CXCursor_TemplateTypeParameter => {
+                EntityKind::TemplateTypeParameter => {
                     let name = c.spelling();
                     interface.template_names.push(name);
                 }
-                CXCursor_ObjCSuperClassRef => {
-                    let item = Item::from_ty_or_ref(c.cur_type(), c, None, ctx);
+                EntityKind::ObjCSuperClassRef => {
+                    let item = Item::from_ty_or_ref(
+                        c.cur_type().unwrap(),
+                        c,
+                        None,
+                        ctx,
+                    );
                     interface.parent_class = Some(item.into());
                 }
                 _ => {}
             }
-            CXChildVisit_Continue
+            EntityVisitResult::Continue
         });
         Some(interface)
     }
@@ -313,7 +310,7 @@ impl ObjCMethod {
     }
 }
 
-impl Trace for ObjCInterface {
+impl<'tu> Trace<'tu> for ObjCInterface {
     type Extra = ();
 
     fn trace<T>(&self, context: &BindgenContext, tracer: &mut T, _: &())

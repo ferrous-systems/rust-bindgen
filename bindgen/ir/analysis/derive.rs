@@ -62,7 +62,7 @@ pub enum DeriveTrait {
 ///   dictate whether the trait is implemented.
 #[derive(Debug, Clone)]
 pub(crate) struct CannotDerive<'ctx> {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
 
     derive_trait: DeriveTrait,
 
@@ -622,7 +622,7 @@ impl fmt::Display for DeriveTrait {
 
 impl<'ctx> MonotoneFramework for CannotDerive<'ctx> {
     type Node = ItemId;
-    type Extra = (&'ctx BindgenContext, DeriveTrait);
+    type Extra = (&'ctx BindgenContext<'ctx>, DeriveTrait);
     type Output = HashMap<ItemId, CanDerive>;
 
     fn new(

@@ -23,7 +23,7 @@ use crate::{HashMap, HashSet};
 ///   has.
 #[derive(Debug, Clone)]
 pub(crate) struct HasFloat<'ctx> {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
 
     // The incremental result of this analysis's computation. Everything in this
     // set has float.
@@ -79,7 +79,7 @@ impl<'ctx> HasFloat<'ctx> {
 
 impl<'ctx> MonotoneFramework for HasFloat<'ctx> {
     type Node = ItemId;
-    type Extra = &'ctx BindgenContext;
+    type Extra = &'ctx BindgenContext<'ctx>;
     type Output = HashSet<ItemId>;
 
     fn new(ctx: &'ctx BindgenContext) -> HasFloat<'ctx> {

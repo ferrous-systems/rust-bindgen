@@ -260,7 +260,7 @@ impl<'ctx> TraversalStorage<'ctx> for ItemSet {
 /// each item. This is useful for providing debug assertions with meaningful
 /// diagnostic messages about dangling items.
 #[derive(Debug)]
-pub(crate) struct Paths<'ctx>(BTreeMap<ItemId, ItemId>, &'ctx BindgenContext);
+pub(crate) struct Paths<'ctx>(BTreeMap<ItemId, ItemId>, &'ctx BindgenContext<'ctx>);
 
 impl<'ctx> TraversalStorage<'ctx> for Paths<'ctx> {
     fn new(ctx: &'ctx BindgenContext) -> Self {
@@ -377,7 +377,7 @@ where
     Storage: TraversalStorage<'ctx>,
     Queue: TraversalQueue,
 {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
 
     /// The set of items we have seen thus far in this traversal.
     seen: Storage,

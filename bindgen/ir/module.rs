@@ -1,9 +1,11 @@
 //! Intermediate representation for modules (AKA C++ namespaces).
 
+use ::clang::EntityKind;
+
 use super::context::BindgenContext;
 use super::dot::DotAttributes;
 use super::item::ItemSet;
-use crate::clang;
+use crate::clang::{self, EntityExt};
 use crate::parse::{ClangSubItemParser, ParseError, ParseResult};
 use crate::parse_one;
 use std::io;
@@ -73,13 +75,12 @@ impl DotAttributes for Module {
 }
 
 impl ClangSubItemParser for Module {
-    fn parse(
-        cursor: clang::Cursor,
-        ctx: &mut BindgenContext,
-    ) -> Result<ParseResult<Self>, ParseError> {
-        use clang_sys::*;
+    fn parse<'tu>(
+        cursor: clang::Cursor<'tu>,
+        ctx: &mut BindgenContext<'tu>,
+    ) -> Result<ParseResult<'tu, Self>, ParseError> {
         match cursor.kind() {
-            CXCursor_Namespace => {
+            EntityKind::Namespace => {
                 let module_id = ctx.module(cursor);
                 ctx.with_module(module_id, |ctx| {
                     cursor.visit(|cursor| {

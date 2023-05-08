@@ -1230,11 +1230,11 @@ impl CompInfo {
     }
 
     /// Construct a new compound type from a Clang type.
-    pub(crate) fn from_ty(
+    pub(crate) fn from_ty<'tu>(
         potential_id: ItemId,
-        ty: &clang::Type,
-        location: Option<clang::Cursor>,
-        ctx: &mut BindgenContext,
+        ty: clang::Type<'tu>,
+        location: Option<clang::Cursor<'tu>>,
+        ctx: &mut BindgenContext<'tu>,
     ) -> Result<Self, ParseError> {
         assert!(
             ty.template_args().is_none(),
@@ -1770,7 +1770,7 @@ impl DotAttributes for CompInfo {
     }
 }
 
-impl IsOpaque for CompInfo {
+impl<'tu> IsOpaque<'tu> for CompInfo {
     type Extra = Option<Layout>;
 
     fn is_opaque(&self, ctx: &BindgenContext, layout: &Option<Layout>) -> bool {

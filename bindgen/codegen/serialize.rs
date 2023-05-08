@@ -14,7 +14,15 @@ use super::CodegenError;
 
 fn get_loc(item: &Item) -> String {
     item.location()
-        .map(|x| x.to_string())
+        .and_then(|loc| {
+            let loc = loc.get_file_location();
+            Some(format!(
+                "{}:{}:{}",
+                loc.file?.get_path().display(),
+                loc.line,
+                loc.column
+            ))
+        })
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
@@ -30,7 +38,7 @@ pub(crate) trait CSerialize<'a> {
     ) -> Result<(), CodegenError>;
 }
 
-impl<'a> CSerialize<'a> for Item {
+impl<'a> CSerialize<'a> for Item<'a> {
     type Extra = ();
 
     fn serialize<W: Write>(
@@ -53,7 +61,7 @@ impl<'a> CSerialize<'a> for Item {
 }
 
 impl<'a> CSerialize<'a> for Function {
-    type Extra = &'a Item;
+    type Extra = &'a Item<'a>;
 
     fn serialize<W: Write>(
         &self,
@@ -153,8 +161,8 @@ impl<'a> CSerialize<'a> for TypeId {
     }
 }
 
-impl<'a> CSerialize<'a> for Type {
-    type Extra = &'a Item;
+impl<'a> CSerialize<'a> for Type<'a> {
+    type Extra = &'a Item<'a>;
 
     fn serialize<W: Write>(
         &self,

@@ -21,7 +21,6 @@ use crate::HashMap;
 use crate::DEFAULT_ANON_FIELDS_PREFIX;
 
 use std::env;
-use std::ffi::{OsStr, OsString};
 #[cfg(feature = "experimental")]
 use std::path::Path;
 use std::path::PathBuf;
@@ -109,20 +108,20 @@ macro_rules! options {
 
         impl Builder {
             /// Generates the command line flags used to create this [`Builder`].
-            pub fn command_line_flags(&self) -> Vec<OsString> {
-                let mut args = Vec::<OsString>::new();
+            pub fn command_line_flags(&self) -> Vec<String> {
+                let mut args = Vec::<String>::new();
 
                 let headers = match self.options.input_headers.split_last() {
                     Some((header, headers)) => {
                         // The last input header is passed as an argument in the first position.
-                        args.push(header.as_os_str().to_owned());
+                        args.push(header.display().to_string());
                         headers
                     },
                     None => &[]
                 };
 
                 $({
-                    let func: fn(&$ty, &mut Vec<OsString>) = as_args!($as_args);
+                    let func: fn(&$ty, &mut Vec<String>) = as_args!($as_args);
                     func(&self.options.$field, &mut args);
                 })*
 
@@ -135,14 +134,14 @@ macro_rules! options {
                 // Add all the clang arguments.
                 args.push("--".into());
 
-                if !self.options.clang_args.is_empty() {
-                    args.extend_from_slice(&self.options.clang_args);
+                for clang_arg in &self.options.clang_args {
+                    args.push(clang_arg.into());
                 }
 
                 // We need to pass all but the last header via the `-include` clang argument.
                 for header in headers {
                     args.push("-include".into());
-                    args.push(header.as_os_str().to_owned());
+                    args.push(header.display().to_string());
                 }
 
                 args
@@ -260,7 +259,7 @@ options! {
         as_args: |depfile, args| {
             if let Some(depfile) = depfile {
                 args.push("--depfile".into());
-                args.push(depfile.depfile_path.as_os_str().to_owned());
+                args.push(depfile.depfile_path.display().to_string());
             }
         },
     },
@@ -1125,8 +1124,8 @@ options! {
             ///     .generate()
             ///     .unwrap();
             /// ```
-            pub fn header<P: AsRef<Path>>(mut self, header: &P) -> Builder {
-                self.options.input_headers.push(header.as_ref.to_owned());
+            pub fn header<P: AsRef<Path> + ?Sized>(mut self, header: &P) -> Builder {
+                self.options.input_headers.push(header.as_ref().to_owned());
                 self
             }
         },
@@ -1134,20 +1133,20 @@ options! {
         as_args: ignore,
     },
     /// The set of arguments to be passed straight through to Clang.
-    clang_args: Vec<OsString> {
+    clang_args: Vec<String> {
         methods: {
             /// Add an argument to be passed straight through to Clang.
-            pub fn clang_arg<S: AsRef<std::ffi::OsStr>>(self, arg: &S) -> Builder {
+            pub fn clang_arg<T: Into<String>>(self, arg: T) -> Builder {
                 self.clang_args([arg.into()])
             }
 
             /// Add several arguments to be passed straight through to Clang.
             pub fn clang_args<I: IntoIterator>(mut self, args: I) -> Builder
             where
-                I::Item: AsRef<OsStr>,
+                I::Item: AsRef<str>,
             {
                 for arg in args {
-                    self.options.clang_args.push(arg);
+                    self.options.clang_args.push(arg.as_ref().to_owned());
                 }
                 self
             }

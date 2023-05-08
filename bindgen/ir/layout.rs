@@ -88,10 +88,10 @@ pub(crate) struct Opaque(pub(crate) Layout);
 
 impl Opaque {
     /// Construct a new opaque type from the given clang type.
-    pub(crate) fn from_clang_ty(
-        ty: clang::Type<'_>,
-        ctx: &BindgenContext,
-    ) -> Type {
+    pub(crate) fn from_clang_ty<'tu>(
+        ty: clang::Type<'tu>,
+        ctx: &BindgenContext<'tu>,
+    ) -> Type<'tu> {
         let layout = Layout::new(ty.size(ctx), ty.align(ctx));
         let ty_kind = TypeKind::Opaque;
         let is_const = ty.is_const();

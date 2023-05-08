@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 /// Generating build depfiles from parsed bindings.
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -8,17 +9,22 @@ pub(crate) struct DepfileSpec {
 }
 
 impl DepfileSpec {
-    pub fn write(&self, deps: &BTreeSet<String>) -> std::io::Result<()> {
+    pub fn write<S: AsRef<OsStr>>(
+        &self,
+        deps: &BTreeSet<S>,
+    ) -> std::io::Result<()> {
         std::fs::write(&self.depfile_path, &self.to_string(deps))
     }
 
-    fn to_string(&self, deps: &BTreeSet<String>) -> String {
+    fn to_string<S: AsRef<OsStr>>(&self, deps: &BTreeSet<S>) -> String {
         // Transforms a string by escaping spaces and backslashes.
         let escape = |s: &str| s.replace('\\', "\\\\").replace(' ', "\\ ");
 
         let mut buf = format!("{}:", escape(&self.output_module));
         for file in deps {
-            buf = format!("{} {}", buf, escape(file));
+            if let Some(file) = file.as_ref().to_str() {
+                buf = format!("{} {}", buf, escape(file));
+            }
         }
         buf
     }
@@ -27,6 +33,7 @@ impl DepfileSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     #[test]
     fn escaping_depfile() {
@@ -35,14 +42,14 @@ mod tests {
             depfile_path: PathBuf::new(),
         };
 
-        let deps: BTreeSet<String> = vec![
-            r"/absolute/path".to_owned(),
-            r"C:\win\absolute\path".to_owned(),
-            r"../relative/path".to_owned(),
-            r"..\win\relative\path".to_owned(),
-            r"../path/with spaces/in/it".to_owned(),
-            r"..\win\path\with spaces\in\it".to_owned(),
-            r"path\with/mixed\separators".to_owned(),
+        let deps: BTreeSet<OsString> = vec![
+            r"/absolute/path".into(),
+            r"C:\win\absolute\path".into(),
+            r"../relative/path".into(),
+            r"..\win\relative\path".into(),
+            r"../path/with spaces/in/it".into(),
+            r"..\win\path\with spaces\in\it".into(),
+            r"path\with/mixed\separators".into(),
         ]
         .into_iter()
         .collect();

@@ -27,10 +27,12 @@
 //! };
 //! ```
 
+use ::clang::{EntityKind, EntityVisitResult};
+
 use super::context::{BindgenContext, ItemId, TypeId};
 use super::item::{IsOpaque, Item, ItemAncestors};
 use super::traversal::{EdgeKind, Trace, Tracer};
-use crate::clang;
+use crate::clang::{self, EntityExt, TypeExt};
 
 /// Template declaration (and such declaration's template parameters) related
 /// methods.
@@ -217,59 +219,72 @@ impl TemplateInstantiation {
     }
 
     /// Parse a `TemplateInstantiation` from a clang `Type`.
-    pub(crate) fn from_ty(
-        ty: &clang::Type,
-        ctx: &mut BindgenContext,
+    pub(crate) fn from_ty<'tu>(
+        ty: Option<clang::Type<'tu>>,
+        ctx: &mut BindgenContext<'tu>,
     ) -> Option<TemplateInstantiation> {
-        use clang_sys::*;
-
+        let ty = ty?;
         let template_args = ty.template_args().map_or(vec![], |args| match ty
             .canonical_type()
             .template_args()
         {
             Some(canonical_args) => {
                 let arg_count = args.len();
-                args.chain(canonical_args.skip(arg_count))
-                    .filter(|t| t.kind() != CXType_Invalid)
+                args.into_iter()
+                    .chain(canonical_args.into_iter().skip(arg_count))
                     .map(|t| {
-                        Item::from_ty_or_ref(t, t.declaration(), None, ctx)
+                        let t = t.unwrap();
+                        Item::from_ty_or_ref(
+                            Some(t),
+                            t.declaration().unwrap(),
+                            None,
+                            ctx,
+                        )
                     })
                     .collect()
             }
             None => args
-                .filter(|t| t.kind() != CXType_Invalid)
-                .map(|t| Item::from_ty_or_ref(t, t.declaration(), None, ctx))
+                .into_iter()
+                .map(|t| {
+                    let t = t.unwrap();
+                    Item::from_ty_or_ref(
+                        Some(t),
+                        t.declaration().unwrap(),
+                        None,
+                        ctx,
+                    )
+                })
                 .collect(),
         });
 
-        let declaration = ty.declaration();
-        let definition = if declaration.kind() == CXCursor_TypeAliasTemplateDecl
-        {
-            Some(declaration)
-        } else {
-            declaration.specialized().or_else(|| {
-                let mut template_ref = None;
-                ty.declaration().visit(|child| {
-                    if child.kind() == CXCursor_TemplateRef {
-                        template_ref = Some(child);
-                        return CXVisit_Break;
-                    }
+        let declaration = ty.declaration().unwrap();
+        let definition =
+            if declaration.kind() == EntityKind::TypeAliasTemplateDecl {
+                Some(declaration)
+            } else {
+                declaration.specialized().or_else(|| {
+                    let mut template_ref = None;
+                    ty.declaration().unwrap().visit(|child| {
+                        if child.kind() == EntityKind::TemplateRef {
+                            template_ref = Some(child);
+                            return EntityVisitResult::Break;
+                        }
 
-                    // Instantiations of template aliases might have the
-                    // TemplateRef to the template alias definition arbitrarily
-                    // deep, so we need to recurse here and not only visit
-                    // direct children.
-                    CXChildVisit_Recurse
-                });
+                        // Instantiations of template aliases might have the
+                        // TemplateRef to the template alias definition arbitrarily
+                        // deep, so we need to recurse here and not only visit
+                        // direct children.
+                        EntityVisitResult::Recurse
+                    });
 
-                template_ref.and_then(|cur| cur.referenced())
-            })
-        };
+                    template_ref.and_then(|cur| cur.referenced())
+                })
+            };
 
         let definition = match definition {
             Some(def) => def,
             None => {
-                if !ty.declaration().is_builtin() {
+                if !ty.declaration().unwrap().is_builtin() {
                     warn!(
                         "Could not find template definition for template \
                          instantiation"
@@ -279,8 +294,12 @@ impl TemplateInstantiation {
             }
         };
 
-        let template_definition =
-            Item::from_ty_or_ref(definition.cur_type(), definition, None, ctx);
+        let template_definition = Item::from_ty_or_ref(
+            definition.cur_type(),
+            definition,
+            None,
+            ctx,
+        );
 
         Some(TemplateInstantiation::new(
             template_definition,
@@ -289,8 +308,8 @@ impl TemplateInstantiation {
     }
 }
 
-impl IsOpaque for TemplateInstantiation {
-    type Extra = Item;
+impl<'tu> IsOpaque<'tu> for TemplateInstantiation {
+    type Extra = Item<'tu>;
 
     /// Is this an opaque template instantiation?
     fn is_opaque(&self, ctx: &BindgenContext, item: &Item) -> bool {
@@ -326,7 +345,7 @@ impl IsOpaque for TemplateInstantiation {
     }
 }
 
-impl Trace for TemplateInstantiation {
+impl<'tu> Trace<'tu> for TemplateInstantiation {
     type Extra = ();
 
     fn trace<T>(&self, _ctx: &BindgenContext, tracer: &mut T, _: &())

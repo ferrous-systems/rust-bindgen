@@ -23,7 +23,7 @@ use crate::{HashMap, HashSet};
 ///   has.
 #[derive(Debug, Clone)]
 pub(crate) struct HasTypeParameterInArray<'ctx> {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
 
     // The incremental result of this analysis's computation. Everything in this
     // set has array.
@@ -85,7 +85,7 @@ impl<'ctx> HasTypeParameterInArray<'ctx> {
 
 impl<'ctx> MonotoneFramework for HasTypeParameterInArray<'ctx> {
     type Node = ItemId;
-    type Extra = &'ctx BindgenContext;
+    type Extra = &'ctx BindgenContext<'ctx>;
     type Output = HashSet<ItemId>;
 
     fn new(ctx: &'ctx BindgenContext) -> HasTypeParameterInArray<'ctx> {

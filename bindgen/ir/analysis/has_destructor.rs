@@ -23,7 +23,7 @@ use crate::{HashMap, HashSet};
 ///   and if T has a destructor.
 #[derive(Debug, Clone)]
 pub(crate) struct HasDestructorAnalysis<'ctx> {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
 
     // The incremental result of this analysis's computation. Everything in this
     // set definitely has a destructor.
@@ -68,7 +68,7 @@ impl<'ctx> HasDestructorAnalysis<'ctx> {
 
 impl<'ctx> MonotoneFramework for HasDestructorAnalysis<'ctx> {
     type Node = ItemId;
-    type Extra = &'ctx BindgenContext;
+    type Extra = &'ctx BindgenContext<'ctx>;
     type Output = HashSet<ItemId>;
 
     fn new(ctx: &'ctx BindgenContext) -> Self {

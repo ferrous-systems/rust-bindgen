@@ -1,10 +1,12 @@
 //! Intermediate representation for C/C++ enumerations.
 
+use ::clang::{EntityKind, EntityVisitResult};
+
 use super::super::codegen::EnumVariation;
 use super::context::{BindgenContext, TypeId};
 use super::item::Item;
 use super::ty::{Type, TypeKind};
-use crate::clang;
+use crate::clang::{self, EntityExt, TypeExt};
 use crate::ir::annotations::Annotations;
 use crate::parse::ParseError;
 use crate::regex_set::RegexSet;
@@ -54,21 +56,20 @@ impl Enum {
     }
 
     /// Construct an enumeration from the given Clang type.
-    pub(crate) fn from_ty(
-        ty: &clang::Type,
-        ctx: &mut BindgenContext,
+    pub(crate) fn from_ty<'tu>(
+        ty: clang::Type<'tu>,
+        ctx: &mut BindgenContext<'tu>,
     ) -> Result<Self, ParseError> {
-        use clang_sys::*;
         debug!("Enum::from_ty {:?}", ty);
 
-        if ty.kind() != CXType_Enum {
+        if ty.kind() != ::clang::TypeKind::Enum {
             return Err(ParseError::Continue);
         }
 
-        let declaration = ty.declaration().canonical();
+        let declaration = ty.declaration().unwrap().canonical();
         let repr = declaration
             .enum_type()
-            .and_then(|et| Item::from_ty(&et, declaration, None, ctx).ok());
+            .and_then(|et| Item::from_ty(et, declaration, None, ctx).ok());
         let mut variants = vec![];
 
         let variant_ty =
@@ -93,7 +94,7 @@ impl Enum {
 
         let definition = declaration.definition().unwrap_or(declaration);
         definition.visit(|cursor| {
-            if cursor.kind() == CXCursor_EnumConstantDecl {
+            if cursor.kind() == EntityKind::EnumConstantDecl {
                 let value = if is_bool {
                     cursor.enum_val_boolean().map(EnumVariantValue::Boolean)
                 } else if is_signed {
@@ -103,7 +104,7 @@ impl Enum {
                 };
                 if let Some(val) = value {
                     let name = cursor.spelling();
-                    let annotations = Annotations::new(&cursor);
+                    let annotations = Annotations::new(cursor);
                     let custom_behavior = ctx
                         .options()
                         .last_callback(|callbacks| {
@@ -145,16 +146,16 @@ impl Enum {
                     ));
                 }
             }
-            CXChildVisit_Continue
+            EntityVisitResult::Continue
         });
         Ok(Enum::new(repr, variants))
     }
 
-    fn is_matching_enum(
+    fn is_matching_enum<'tu>(
         &self,
-        ctx: &BindgenContext,
+        ctx: &BindgenContext<'tu>,
         enums: &RegexSet,
-        item: &Item,
+        item: &Item<'tu>,
     ) -> bool {
         let path = item.path_for_allowlisting(ctx);
         let enum_ty = item.expect_type();
@@ -172,10 +173,10 @@ impl Enum {
     }
 
     /// Returns the final representation of the enum.
-    pub(crate) fn computed_enum_variation(
+    pub(crate) fn computed_enum_variation<'tu>(
         &self,
-        ctx: &BindgenContext,
-        item: &Item,
+        ctx: &BindgenContext<'tu>,
+        item: &Item<'tu>,
     ) -> EnumVariation {
         // ModuleConsts has higher precedence before Rust in order to avoid
         // problems with overlapping match patterns.

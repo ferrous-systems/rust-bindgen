@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+
 
 /// Helper function that appends extra documentation to [`crate::Builder`] methods that support regular
 /// expressions in their input.
@@ -42,4 +42,4 @@ macro_rules! as_args {
 /// Helper function to ignore an option when converting it into CLI arguments.
 ///
 /// This function is only used inside `options` and should not be used in other contexts.
-pub(super) fn ignore<T>(_: &T, _: &mut Vec<OsString>) {}
+pub(super) fn ignore<T>(_: &T, _: &mut Vec<String>) {}

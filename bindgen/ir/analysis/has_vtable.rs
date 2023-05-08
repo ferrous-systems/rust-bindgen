@@ -61,7 +61,7 @@ impl ops::BitOrAssign for HasVtableResult {
 ///   vtable if template definition has vtable
 #[derive(Debug, Clone)]
 pub(crate) struct HasVtableAnalysis<'ctx> {
-    ctx: &'ctx BindgenContext,
+    ctx: &'ctx BindgenContext<'ctx>,
 
     // The incremental result of this analysis's computation. Everything in this
     // set definitely has a vtable.
@@ -132,7 +132,7 @@ impl<'ctx> HasVtableAnalysis<'ctx> {
 
 impl<'ctx> MonotoneFramework for HasVtableAnalysis<'ctx> {
     type Node = ItemId;
-    type Extra = &'ctx BindgenContext;
+    type Extra = &'ctx BindgenContext<'ctx>;
     type Output = HashMap<ItemId, HasVtableResult>;
 
     fn new(ctx: &'ctx BindgenContext) -> HasVtableAnalysis<'ctx> {
